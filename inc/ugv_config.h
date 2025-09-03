@@ -1,0 +1,158 @@
+#ifndef UGV_CONFIG_H
+#define UGV_CONFIG_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <driver/gpio.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Pin definitions for RaspRover
+#define AIN1 GPIO_NUM_32      // Left motor direction 1
+#define AIN2 GPIO_NUM_33      // Left motor direction 2
+#define PWMA GPIO_NUM_25      // Left motor PWM
+#define BIN1 GPIO_NUM_26      // Right motor direction 1
+#define BIN2 GPIO_NUM_27      // Right motor direction 2
+#define PWMB GPIO_NUM_14      // Right motor PWM
+
+// Encoder pins
+#define LEFT_ENCODER_A GPIO_NUM_34
+#define LEFT_ENCODER_B GPIO_NUM_35
+#define RIGHT_ENCODER_A GPIO_NUM_36
+#define RIGHT_ENCODER_B GPIO_NUM_39
+
+// I2C pins
+#define S_SDA GPIO_NUM_21
+#define S_SCL GPIO_NUM_22
+
+// UART pins for servo control
+#define SERVO_RXD GPIO_NUM_18
+#define SERVO_TXD GPIO_NUM_19
+
+// LED control pins
+#define LED_PIN GPIO_NUM_2
+
+// OLED display pins (I2C)
+#define OLED_SDA S_SDA
+#define OLED_SCL S_SCL
+
+// Battery monitoring pins
+#define BATTERY_VOLTAGE_PIN GPIO_NUM_4
+
+// Servo IDs for RoArm-M2
+#define BASE_SERVO_ID          11
+#define SHOULDER_DRIVING_SERVO_ID 12
+#define SHOULDER_DRIVEN_SERVO_ID  13
+#define ELBOW_SERVO_ID         14
+#define GRIPPER_SERVO_ID       15
+
+// Servo configuration
+#define ARM_SERVO_MIDDLE_POS   2047
+#define ARM_SERVO_MIDDLE_ANGLE 180
+#define ARM_SERVO_POS_RANGE    4096
+#define ARM_SERVO_ANGLE_RANGE  360
+#define ARM_SERVO_INIT_SPEED   600
+#define ARM_SERVO_INIT_ACC     20
+
+// Arm dimensions (mm)
+#define ARM_L1_LENGTH_MM       126.06
+#define ARM_L2_LENGTH_MM_A     236.82
+#define ARM_L2_LENGTH_MM_B     30.00
+#define ARM_L3_LENGTH_MM_A_0   280.15
+#define ARM_L3_LENGTH_MM_B_0   1.73
+
+// PWM configuration
+#define PWM_FREQ               5000
+#define PWM_RESOLUTION         LEDC_TIMER_13_BIT
+#define PWM_MAX_DUTY           8191
+
+// PID configuration
+#define PID_SAMPLE_TIME_MS     20
+#define PID_OUTPUT_LIMIT       255
+
+// Motor configuration
+#define MOTOR_MAX_SPEED        1.0f    // m/s
+#define MOTOR_MAX_ANGULAR      3.14f   // rad/s
+
+// IMU configuration
+#define IMU_SAMPLE_RATE_HZ     100
+#define IMU_CALIBRATION_SAMPLES 1000
+
+// Communication configuration
+#define UART_BAUD_RATE         115200
+#define WIFI_SSID              "RaspRover_AP"
+#define WIFI_PASSWORD          "rasprover123"
+#define HTTP_SERVER_PORT       80
+
+// Task priorities
+#define MAIN_TASK_PRIORITY     5
+#define IMU_TASK_PRIORITY      4
+#define MOTION_TASK_PRIORITY   3
+#define COMM_TASK_PRIORITY     2
+
+// Task stack sizes
+#define MAIN_TASK_STACK_SIZE   8192
+#define IMU_TASK_STACK_SIZE    4096
+#define MOTION_TASK_STACK_SIZE 4096
+#define COMM_TASK_STACK_SIZE   4096
+
+// Queue sizes
+#define JSON_CMD_QUEUE_SIZE    10
+#define IMU_DATA_QUEUE_SIZE    20
+#define MOTION_CMD_QUEUE_SIZE  10
+
+// Configuration structure
+typedef struct {
+    uint8_t main_type;           // 1=RaspRover, 2=UGV Rover, 3=UGV Beast
+    uint8_t module_type;         // 0=None, 1=RoArm-M2, 2=Gimbal
+    uint8_t info_print;          // 0=Off, 1=Debug, 2=Flow feedback
+    uint8_t esp_now_mode;        // 0=None, 1=Group leader, 2=Single leader, 3=Follower
+    bool ctrl_by_broadcast;      // Allow broadcast control
+    bool steady_mode;            // Gimbal steady mode
+    bool base_feedback_flow;     // Enable base feedback
+    uint8_t eem_mode;           // End effector mode: 0=Gripper, 1=Wrist
+} ugv_config_t;
+
+// Robot types
+#define ROBOT_TYPE_RASPROVER   1
+#define ROBOT_TYPE_UGV_ROVER   2
+#define ROBOT_TYPE_UGV_BEAST   3
+
+// Module types
+#define MODULE_TYPE_NONE       0
+#define MODULE_TYPE_ROARM_M2   1
+#define MODULE_TYPE_GIMBAL     2
+
+// ESP-NOW modes
+#define ESP_NOW_MODE_NONE      0
+#define ESP_NOW_MODE_GROUP_LEADER 1
+#define ESP_NOW_MODE_SINGLE_LEADER 2
+#define ESP_NOW_MODE_FOLLOWER 3
+
+// Default configuration
+#define DEFAULT_MAIN_TYPE      ROBOT_TYPE_RASPROVER
+#define DEFAULT_MODULE_TYPE    MODULE_TYPE_GIMBAL
+#define DEFAULT_INFO_PRINT     1
+#define DEFAULT_ESP_NOW_MODE   ESP_NOW_MODE_FOLLOWER
+#define DEFAULT_CTRL_BY_BROADCAST true
+#define DEFAULT_STEADY_MODE    false
+#define DEFAULT_BASE_FEEDBACK_FLOW true
+#define DEFAULT_EEM_MODE       0
+
+// Emergency stop configuration
+#define EMERGENCY_STOP_TIMEOUT_MS 1000
+
+// Heartbeat configuration
+#define HEARTBEAT_INTERVAL_MS  1000
+
+// File system configuration
+#define SPIFFS_MAX_FILES       5
+#define SPIFFS_PARTITION_LABEL "spiffs"
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // UGV_CONFIG_H

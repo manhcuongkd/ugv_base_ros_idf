@@ -1,0 +1,23 @@
+# ESP-IDF built-in components (these are already available)
+dependencies:
+  idf:
+    version: ">=4.4.0"
+    rules:
+      - if: "idf_version >=4.4.0"
+
+# Project metadata
+version: "1.0.0"
+description: "RaspRover IDF - ESP32-Based Robot Control System"
+url: "https://github.com/yourusername/RaspRover-IDF"
+repository: "https://github.com/yourusername/RaspRover-IDF.git"
+license: "GPL-3.0"
+keywords:
+  - "esp32"
+  - "robot"
+  - "control"
+  - "ugv"
+  - "rasprover"
+authors:
+  - "Your Name <your.email@example.com>"
+maintainers:
+  - "Your Name <your.email@example.com>"

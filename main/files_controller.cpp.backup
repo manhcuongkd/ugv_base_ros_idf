@@ -1,0 +1,1033 @@
+#include "../inc/files_controller.h"
+#include "../inc/motion_module.h"
+#include "../inc/servo_controller.h"
+#include "../inc/gimbal_controller.h"
+#include <esp_spiffs.h>
+#include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <string.h>
+#include <cJSON.h>
+#include <sys/stat.h>
+#include <dirent.h>
+
+static const char *TAG = "Files_Controller";
+
+// File system configuration
+#define SPIFFS_PARTITION_LABEL "storage"
+#define SPIFFS_MAX_FILES 10
+#define SPIFFS_MAX_PATH_LEN 64
+#define SPIFFS_MAX_FILE_SIZE 4096
+
+// Global variables
+static bool files_initialized = false;
+static files_status_t files_status;
+
+// Private function prototypes
+static esp_err_t files_create_default_files(void);
+
+esp_err_t files_controller_init(void)
+{
+    if (files_initialized) {
+        ESP_LOGW(TAG, "Files controller already initialized");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Initializing files controller...");
+
+    // Mount SPIFFS
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/spiffs",
+        .partition_label = SPIFFS_PARTITION_LABEL,
+        .max_files = SPIFFS_MAX_FILES,
+        .format_if_mount_failed = true
+    };
+
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to mount SPIFFS: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Get partition info
+    ret = esp_spiffs_info(SPIFFS_PARTITION_LABEL, &files_status.total_bytes, &files_status.used_bytes);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to get SPIFFS info: %s", esp_err_to_name(ret));
+        files_status.total_bytes = 0;
+        files_status.used_bytes = 0;
+    } else {
+        ESP_LOGI(TAG, "SPIFFS: %d/%d bytes used", files_status.used_bytes, files_status.total_bytes);
+    }
+
+    files_status.mounted = true;
+    files_status.free_bytes = files_status.total_bytes - files_status.used_bytes;
+    files_status.file_count = 0;
+
+    // Create default files if they don't exist
+    ret = files_create_default_files();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to create default files: %s", esp_err_to_name(ret));
+    }
+
+    files_initialized = true;
+    ESP_LOGI(TAG, "Files controller initialized successfully");
+    return ESP_OK;
+}
+
+esp_err_t files_controller_deinit(void)
+{
+    if (!files_initialized) {
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Deinitializing files controller...");
+
+    esp_err_t ret = esp_vfs_spiffs_unregister(SPIFFS_PARTITION_LABEL);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to unregister SPIFFS: %s", esp_err_to_name(ret));
+    }
+
+    files_status.mounted = false;
+    files_initialized = false;
+    ESP_LOGI(TAG, "Files controller deinitialized");
+    return ESP_OK;
+}
+
+esp_err_t files_controller_mount(void)
+{
+    if (files_initialized) {
+        ESP_LOGW(TAG, "Files controller already mounted");
+        return ESP_OK;
+    }
+
+    return files_controller_init();
+}
+
+esp_err_t files_controller_unmount(void)
+{
+    if (!files_initialized) {
+        ESP_LOGW(TAG, "Files controller not mounted");
+        return ESP_OK;
+    }
+
+    return files_controller_deinit();
+}
+
+esp_err_t files_controller_create_file(const char *filename, const char *content)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (filename == NULL || content == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filepath[SPIFFS_MAX_PATH_LEN];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+
+    FILE *file = fopen(filepath, "w");
+    if (file == NULL) {
+        ESP_LOGE(TAG, "Failed to open file for writing: %s", filepath);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    size_t written = fwrite(content, 1, strlen(content), file);
+    fclose(file);
+
+    if (written != strlen(content)) {
+        ESP_LOGE(TAG, "Failed to write complete content: %d/%d bytes", written, strlen(content));
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    ESP_LOGI(TAG, "File created successfully: %s (%d bytes)", filename, written);
+    return ESP_OK;
+}
+
+esp_err_t files_controller_read_file(const char *filename, char *content, size_t max_len)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (filename == NULL || content == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filepath[SPIFFS_MAX_PATH_LEN];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+
+    FILE *file = fopen(filepath, "r");
+    if (file == NULL) {
+        ESP_LOGE(TAG, "Failed to open file for reading: %s", filepath);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    size_t bytes_read = fread(content, 1, max_len - 1, file);
+    fclose(file);
+
+    // Null-terminate the content
+    content[bytes_read] = '\0';
+
+    ESP_LOGI(TAG, "File read successfully: %s (%d bytes)", filename, bytes_read);
+    return ESP_OK;
+}
+
+esp_err_t files_controller_write_file(const char *filename, const char *content)
+{
+    return files_controller_create_file(filename, content);
+}
+
+esp_err_t files_controller_delete_file(const char *filename)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (filename == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filepath[SPIFFS_MAX_PATH_LEN];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+
+    esp_err_t ret = remove(filepath);
+    if (ret != 0) {
+        ESP_LOGE(TAG, "Failed to delete file: %s", filepath);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    ESP_LOGI(TAG, "File deleted successfully: %s", filename);
+    return ESP_OK;
+}
+
+esp_err_t files_controller_file_exists(const char *filename)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (filename == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filepath[SPIFFS_MAX_PATH_LEN];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+
+    struct stat st;
+    if (stat(filepath, &st) == 0) {
+        return ESP_OK;
+    } else {
+        return ESP_ERR_NOT_FOUND;
+    }
+}
+
+esp_err_t files_controller_list_files(char *file_list, size_t max_len)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (file_list == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    DIR *dir = opendir("/spiffs");
+    if (dir == NULL) {
+        ESP_LOGE(TAG, "Failed to open SPIFFS directory");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    cJSON *json_array = cJSON_CreateArray();
+    struct dirent *entry;
+    uint32_t file_count = 0;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_type == DT_REG) { // Regular file
+            cJSON *file_info = cJSON_CreateObject();
+            cJSON_AddStringToObject(file_info, "name", entry->d_name);
+            
+            // Get file size
+            char filepath[SPIFFS_MAX_PATH_LEN];
+            snprintf(filepath, sizeof(filepath), "/spiffs/%.*s", (int)(sizeof(filepath) - 9), entry->d_name);
+            struct stat st;
+            if (stat(filepath, &st) == 0) {
+                cJSON_AddNumberToObject(file_info, "size", st.st_size);
+                cJSON_AddNumberToObject(file_info, "modified", st.st_mtime);
+            }
+            
+            cJSON_AddItemToArray(json_array, file_info);
+            file_count++;
+        }
+    }
+
+    closedir(dir);
+
+    // Update file count
+    files_status.file_count = file_count;
+
+    // Convert to string
+    char *json_str = cJSON_Print(json_array);
+    if (json_str != NULL) {
+        size_t json_len = strlen(json_str);
+        if (json_len < max_len) {
+            strcpy(file_list, json_str);
+        } else {
+            ESP_LOGW(TAG, "Buffer too small for file list");
+            free(json_str);
+            cJSON_Delete(json_array);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        free(json_str);
+    }
+
+    cJSON_Delete(json_array);
+    return ESP_OK;
+}
+
+esp_err_t files_controller_create_mission(const char *name, const char *commands)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (name == NULL || commands == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Create mission file
+    char filename[64];
+    snprintf(filename, sizeof(filename), "mission_%s.json", name);
+    
+    // Create mission JSON
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "name", name);
+    cJSON_AddStringToObject(json, "commands", commands);
+    cJSON_AddBoolToObject(json, "active", false);
+    cJSON_AddNumberToObject(json, "created_time", esp_timer_get_time() / 1000);
+
+    char *json_str = cJSON_Print(json);
+    if (json_str == NULL) {
+        cJSON_Delete(json);
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_err_t ret = files_controller_create_file(filename, json_str);
+    
+    free(json_str);
+    cJSON_Delete(json);
+    
+    return ret;
+}
+
+esp_err_t files_controller_delete_mission(const char *name)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (name == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filename[64];
+    snprintf(filename, sizeof(filename), "mission_%s.json", name);
+    
+    return files_controller_delete_file(filename);
+}
+
+esp_err_t files_controller_play_mission(const char *name, int repeat_count)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (name == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Read mission file
+    char filename[64];
+    snprintf(filename, sizeof(filename), "mission_%s.json", name);
+    
+    char content[SPIFFS_MAX_FILE_SIZE];
+    esp_err_t ret = files_controller_read_file(filename, content, sizeof(content));
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // Parse mission JSON
+    cJSON *json = cJSON_Parse(content);
+    if (json == NULL) {
+        ESP_LOGE(TAG, "Failed to parse mission JSON");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Extract commands
+    cJSON *commands_item = cJSON_GetObjectItem(json, "commands");
+    if (cJSON_IsString(commands_item)) {
+        ESP_LOGI(TAG, "Playing mission: %s (repeat: %d)", name, repeat_count);
+        ESP_LOGI(TAG, "Commands: %s", commands_item->valuestring);
+        
+        // Execute mission commands
+        const char *commands_str = commands_item->valuestring;
+        cJSON *commands_json = cJSON_Parse(commands_str);
+        if (commands_json != NULL) {
+            if (cJSON_IsArray(commands_json)) {
+                int cmd_count = cJSON_GetArraySize(commands_json);
+                ESP_LOGI(TAG, "Executing %d mission commands", cmd_count);
+                
+                for (int i = 0; i < cmd_count; i++) {
+                    cJSON *cmd = cJSON_GetArrayItem(commands_json, i);
+                    if (cJSON_IsObject(cmd)) {
+                        cJSON *cmd_type = cJSON_GetObjectItem(cmd, "type");
+                        cJSON *cmd_data = cJSON_GetObjectItem(cmd, "data");
+                        
+                        if (cJSON_IsString(cmd_type) && cmd_data != NULL) {
+                            const char *type = cmd_type->valuestring;
+                            ESP_LOGI(TAG, "Executing command %d: %s", i + 1, type);
+                            
+                            // Execute command based on type
+                            if (strcmp(type, "motion") == 0) {
+                                // Motion command
+                                cJSON *left_speed = cJSON_GetObjectItem(cmd_data, "left_speed");
+                                cJSON *right_speed = cJSON_GetObjectItem(cmd_data, "right_speed");
+                                if (cJSON_IsNumber(left_speed) && cJSON_IsNumber(right_speed)) {
+                                    ESP_LOGI(TAG, "Motion: L=%.2f, R=%.2f", 
+                                             left_speed->valuedouble, right_speed->valuedouble);
+                                    motion_module_set_speed_rate(left_speed->valuedouble, right_speed->valuedouble);
+                                }
+                            } else if (strcmp(type, "servo") == 0) {
+                                // Servo command
+                                cJSON *servo_id = cJSON_GetObjectItem(cmd_data, "servo_id");
+                                cJSON *position = cJSON_GetObjectItem(cmd_data, "position");
+                                if (cJSON_IsNumber(servo_id) && cJSON_IsNumber(position)) {
+                                    ESP_LOGI(TAG, "Servo %d: position %d", 
+                                             servo_id->valueint, position->valueint);
+                                    servo_controller_set_position(servo_id->valueint, position->valueint, 1000);
+                                }
+                            } else if (strcmp(type, "delay") == 0) {
+                                // Delay command
+                                cJSON *delay_ms = cJSON_GetObjectItem(cmd_data, "delay_ms");
+                                if (cJSON_IsNumber(delay_ms)) {
+                                    ESP_LOGI(TAG, "Delay: %d ms", delay_ms->valueint);
+                                    vTaskDelay(pdMS_TO_TICKS(delay_ms->valueint));
+                                }
+                            } else if (strcmp(type, "gimbal") == 0) {
+                                // Gimbal command
+                                cJSON *pan = cJSON_GetObjectItem(cmd_data, "pan");
+                                cJSON *tilt = cJSON_GetObjectItem(cmd_data, "tilt");
+                                if (cJSON_IsNumber(pan) && cJSON_IsNumber(tilt)) {
+                                    ESP_LOGI(TAG, "Gimbal: pan=%.2f, tilt=%.2f", 
+                                             pan->valuedouble, tilt->valuedouble);
+                                    gimbal_controller_set_pan_tilt(pan->valuedouble, tilt->valuedouble);
+                                }
+                            } else {
+                                ESP_LOGW(TAG, "Unknown command type: %s", type);
+                            }
+                        }
+                    }
+                    
+                    // Small delay between commands
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                }
+                
+                ESP_LOGI(TAG, "Mission execution completed");
+            } else {
+                ESP_LOGW(TAG, "Commands is not an array");
+            }
+            cJSON_Delete(commands_json);
+        } else {
+            ESP_LOGE(TAG, "Failed to parse commands JSON");
+        }
+    }
+
+    cJSON_Delete(json);
+    return ESP_OK;
+}
+
+esp_err_t files_controller_list_missions(mission_t *missions, uint8_t *count)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (missions == NULL || count == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // List all mission files
+    char file_list[SPIFFS_MAX_FILE_SIZE];
+    esp_err_t ret = files_controller_list_files(file_list, sizeof(file_list));
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // Parse file list and extract missions
+    cJSON *json = cJSON_Parse(file_list);
+    if (json == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t mission_count = 0;
+    int array_size = cJSON_GetArraySize(json);
+    
+    for (int i = 0; i < array_size && mission_count < *count; i++) {
+        cJSON *file_info = cJSON_GetArrayItem(json, i);
+        if (cJSON_IsObject(file_info)) {
+            cJSON *name_item = cJSON_GetObjectItem(file_info, "name");
+            if (cJSON_IsString(name_item)) {
+                const char *filename = name_item->valuestring;
+                if (strncmp(filename, "mission_", 8) == 0) {
+                    // Extract mission name
+                    const char *mission_name = filename + 8; // Skip "mission_"
+                    if (strlen(mission_name) > 4 && strcmp(mission_name + strlen(mission_name) - 5, ".json") == 0) {
+                        // Remove .json extension
+                        char clean_name[32];
+                        strncpy(clean_name, mission_name, strlen(mission_name) - 5);
+                        clean_name[strlen(mission_name) - 5] = '\0';
+                        
+                        strncpy(missions[mission_count].name, clean_name, sizeof(missions[mission_count].name) - 1);
+                        missions[mission_count].name[sizeof(missions[mission_count].name) - 1] = '\0';
+                        
+                        // Read mission content
+                        char content[SPIFFS_MAX_FILE_SIZE];
+                        if (files_controller_read_file(filename, content, sizeof(content)) == ESP_OK) {
+                            cJSON *mission_json = cJSON_Parse(content);
+                            if (mission_json != NULL) {
+                                cJSON *commands_item = cJSON_GetObjectItem(mission_json, "commands");
+                                if (cJSON_IsString(commands_item)) {
+                                    strncpy(missions[mission_count].commands, commands_item->valuestring, 
+                                           sizeof(missions[mission_count].commands) - 1);
+                                    missions[mission_count].commands[sizeof(missions[mission_count].commands) - 1] = '\0';
+                                }
+                                
+                                cJSON *active_item = cJSON_GetObjectItem(mission_json, "active");
+                                if (cJSON_IsBool(active_item)) {
+                                    missions[mission_count].active = cJSON_IsTrue(active_item);
+                                }
+                                
+                                cJSON *time_item = cJSON_GetObjectItem(mission_json, "created_time");
+                                if (cJSON_IsNumber(time_item)) {
+                                    missions[mission_count].created_time = time_item->valueint;
+                                }
+                                
+                                cJSON_Delete(mission_json);
+                            }
+                        }
+                        
+                        mission_count++;
+                    }
+                }
+            }
+        }
+    }
+
+    cJSON_Delete(json);
+    *count = mission_count;
+    
+    return ESP_OK;
+}
+
+esp_err_t files_controller_get_mission(const char *name, mission_t *mission)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (name == NULL || mission == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filename[64];
+    snprintf(filename, sizeof(filename), "mission_%s.json", name);
+    
+    char content[SPIFFS_MAX_FILE_SIZE];
+    esp_err_t ret = files_controller_read_file(filename, content, sizeof(content));
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // Parse mission JSON
+    cJSON *json = cJSON_Parse(content);
+    if (json == NULL) {
+        ESP_LOGE(TAG, "Failed to parse mission JSON");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Extract mission data
+    strncpy(mission->name, name, sizeof(mission->name) - 1);
+    mission->name[sizeof(mission->name) - 1] = '\0';
+
+    cJSON *commands_item = cJSON_GetObjectItem(json, "commands");
+    if (cJSON_IsString(commands_item)) {
+        strncpy(mission->commands, commands_item->valuestring, sizeof(mission->commands) - 1);
+        mission->commands[sizeof(mission->commands) - 1] = '\0';
+    }
+
+    cJSON *active_item = cJSON_GetObjectItem(json, "active");
+    if (cJSON_IsBool(active_item)) {
+        mission->active = cJSON_IsTrue(active_item);
+    }
+
+    cJSON *time_item = cJSON_GetObjectItem(json, "created_time");
+    if (cJSON_IsNumber(time_item)) {
+        mission->created_time = time_item->valueint;
+    }
+
+    cJSON_Delete(json);
+    return ESP_OK;
+}
+
+esp_err_t files_controller_get_status(files_status_t *status)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Update status
+    esp_spiffs_info(SPIFFS_PARTITION_LABEL, &files_status.total_bytes, &files_status.used_bytes);
+    files_status.free_bytes = files_status.total_bytes - files_status.used_bytes;
+
+    memcpy(status, &files_status, sizeof(files_status_t));
+    return ESP_OK;
+}
+
+esp_err_t files_controller_get_free_space(uint32_t *free_bytes)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (free_bytes == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    size_t total, used;
+    esp_err_t ret = esp_spiffs_info(SPIFFS_PARTITION_LABEL, &total, &used);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    *free_bytes = total - used;
+    return ESP_OK;
+}
+
+esp_err_t files_controller_scan_contents(void)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // List all files to update file count
+    char file_list[SPIFFS_MAX_FILE_SIZE];
+    esp_err_t ret = files_controller_list_files(file_list, sizeof(file_list));
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "File system scanned, found %d files", files_status.file_count);
+    return ESP_OK;
+}
+
+esp_err_t files_controller_save_config(const char *config_name, const cJSON *config)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (config_name == NULL || config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filename[64];
+    snprintf(filename, sizeof(filename), "config_%s.json", config_name);
+    
+    char *json_str = cJSON_Print(config);
+    if (json_str == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_err_t ret = files_controller_create_file(filename, json_str);
+    free(json_str);
+    
+    return ret;
+}
+
+esp_err_t files_controller_load_config(const char *config_name, cJSON **config)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (config_name == NULL || config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filename[64];
+    snprintf(filename, sizeof(filename), "config_%s.json", config_name);
+    
+    char content[SPIFFS_MAX_FILE_SIZE];
+    esp_err_t ret = files_controller_read_file(filename, content, sizeof(content));
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    *config = cJSON_Parse(content);
+    if (*config == NULL) {
+        ESP_LOGE(TAG, "Failed to parse config JSON");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t files_controller_delete_config(const char *config_name)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (config_name == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filename[64];
+    snprintf(filename, sizeof(filename), "config_%s.json", config_name);
+    
+    return files_controller_delete_file(filename);
+}
+
+esp_err_t files_controller_format(void)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGW(TAG, "Formatting SPIFFS partition...");
+    
+    esp_err_t ret = esp_spiffs_format(SPIFFS_PARTITION_LABEL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to format SPIFFS: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "SPIFFS formatted successfully");
+    return ESP_OK;
+}
+
+esp_err_t files_controller_check_integrity(void)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Check if SPIFFS is accessible
+    DIR *dir = opendir("/spiffs");
+    if (dir == NULL) {
+        ESP_LOGE(TAG, "SPIFFS integrity check failed - cannot open directory");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    closedir(dir);
+    ESP_LOGI(TAG, "SPIFFS integrity check passed");
+    return ESP_OK;
+}
+
+const char* files_controller_get_error_string(esp_err_t error)
+{
+    return esp_err_to_name(error);
+}
+
+// Private functions
+static esp_err_t files_create_default_files(void)
+{
+    // Create a default mission
+    const char *default_mission = "{\"name\":\"Default Mission\",\"commands\":\"FORWARD 100\\nTURN 90\\nFORWARD 100\",\"active\":false,\"created_time\":0}";
+    
+    esp_err_t ret = files_controller_create_file("mission_default.json", default_mission);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to create default mission file");
+    }
+
+    // Create a default config
+    const char *default_config = "{\"robot_name\":\"RaspRover\",\"max_speed\":100,\"pid_kp\":1.0,\"pid_ki\":0.1,\"pid_kd\":0.05}";
+    
+    ret = files_controller_create_file("config_default.json", default_config);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to create default config file");
+    }
+
+    return ESP_OK;
+}
+
+
+// ============================================================================
+// LINE-BASED FILE OPERATIONS (Missing Implementations)
+// ============================================================================
+
+esp_err_t files_controller_append_line(const char *filename, const char *content)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (filename == NULL || content == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filepath[128];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+
+    FILE *file = fopen(filepath, "a");
+    if (file == NULL) {
+        ESP_LOGE(TAG, "Failed to open file %s for appending", filename);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    fprintf(file, "%s\n", content);
+    fclose(file);
+
+    ESP_LOGI(TAG, "Line appended to file %s: %s", filename, content);
+    return ESP_OK;
+}
+
+
+esp_err_t files_controller_insert_line(const char *filename, int line_num, const char *content)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (filename == NULL || content == NULL || line_num < 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filepath[128];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+
+    // Read entire file into memory
+    char temp_content[SPIFFS_MAX_FILE_SIZE];
+    esp_err_t ret = files_controller_read_file(filename, temp_content, sizeof(temp_content));
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // Create temporary file with inserted line
+    char temp_filepath[128];
+    snprintf(temp_filepath, sizeof(temp_filepath), "/spiffs/%s.tmp", filename);
+
+    FILE *temp_file = fopen(temp_filepath, "w");
+    if (temp_file == NULL) {
+        ESP_LOGE(TAG, "Failed to create temporary file");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    // Write lines with insertion
+    char *line = strtok(temp_content, "\n");
+    int current_line = 1;
+    
+    while (line != NULL) {
+        if (current_line == line_num) {
+            fprintf(temp_file, "%s\n", content);
+        }
+        fprintf(temp_file, "%s\n", line);
+        line = strtok(NULL, "\n");
+        current_line++;
+    }
+
+    // If inserting at end
+    if (line_num >= current_line) {
+        fprintf(temp_file, "%s\n", content);
+    }
+
+    fclose(temp_file);
+
+    // Replace original file
+    remove(filepath);
+    rename(temp_filepath, filepath);
+
+    ESP_LOGI(TAG, "Line inserted at position %d in file %s: %s", line_num, filename, content);
+    return ESP_OK;
+}
+
+
+esp_err_t files_controller_replace_line(const char *filename, int line_num, const char *content)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (filename == NULL || content == NULL || line_num < 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filepath[128];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+
+    // Read entire file into memory
+    char temp_content[SPIFFS_MAX_FILE_SIZE];
+    esp_err_t ret = files_controller_read_file(filename, temp_content, sizeof(temp_content));
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // Create temporary file with replaced line
+    char temp_filepath[128];
+    snprintf(temp_filepath, sizeof(temp_filepath), "/spiffs/%s.tmp", filename);
+
+    FILE *temp_file = fopen(temp_filepath, "w");
+    if (temp_file == NULL) {
+        ESP_LOGE(TAG, "Failed to create temporary file");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    // Write lines with replacement
+    char *line = strtok(temp_content, "\n");
+    int current_line = 1;
+    
+    while (line != NULL) {
+        if (current_line == line_num) {
+            fprintf(temp_file, "%s\n", content);
+        } else {
+            fprintf(temp_file, "%s\n", line);
+        }
+        line = strtok(NULL, "\n");
+        current_line++;
+    }
+
+    fclose(temp_file);
+
+    // Replace original file
+    remove(filepath);
+    rename(temp_filepath, filepath);
+
+    ESP_LOGI(TAG, "Line replaced at position %d in file %s: %s", line_num, filename, content);
+    return ESP_OK;
+}
+
+
+esp_err_t files_controller_read_line(const char *filename, int line_num, char *content, size_t max_len)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (filename == NULL || content == NULL || line_num < 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filepath[128];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+
+    FILE *file = fopen(filepath, "r");
+    if (file == NULL) {
+        ESP_LOGE(TAG, "Failed to open file %s for reading", filename);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    char line_buffer[256];
+    int current_line = 0;
+    
+    while (fgets(line_buffer, sizeof(line_buffer), file) != NULL) {
+        current_line++;
+        if (current_line == line_num) {
+            // Remove newline character
+            size_t len = strlen(line_buffer);
+            if (len > 0 && line_buffer[len-1] == "\n") {
+                line_buffer[len-1] = "\0";
+            }
+            
+            strncpy(content, line_buffer, max_len - 1);
+            content[max_len - 1] = "\0";
+            
+            fclose(file);
+            ESP_LOGI(TAG, "Line %d read from file %s: %s", line_num, filename, content);
+            return ESP_OK;
+        }
+    }
+
+    fclose(file);
+    ESP_LOGE(TAG, "Line %d not found in file %s", line_num, filename);
+    return ESP_ERR_NOT_FOUND;
+}
+
+
+esp_err_t files_controller_delete_line(const char *filename, int line_num)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (filename == NULL || line_num < 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filepath[128];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+
+    // Read entire file into memory
+    char temp_content[SPIFFS_MAX_FILE_SIZE];
+    esp_err_t ret = files_controller_read_file(filename, temp_content, sizeof(temp_content));
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // Create temporary file without deleted line
+    char temp_filepath[128];
+    snprintf(temp_filepath, sizeof(temp_filepath), "/spiffs/%s.tmp", filename);
+
+    FILE *temp_file = fopen(temp_filepath, "w");
+    if (temp_file == NULL) {
+        ESP_LOGE(TAG, "Failed to create temporary file");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    // Write lines excluding deleted line
+    char *line = strtok(temp_content, "\n");
+    int current_line = 1;
+    
+    while (line != NULL) {
+        if (current_line != line_num) {
+            fprintf(temp_file, "%s\n", line);
+        }
+        line = strtok(NULL, "\n");
+        current_line++;
+    }
+
+    fclose(temp_file);
+
+    // Replace original file
+    remove(filepath);
+    rename(temp_filepath, filepath);
+
+    ESP_LOGI(TAG, "Line %d deleted from file %s", line_num, filename);
+    return ESP_OK;
+}
