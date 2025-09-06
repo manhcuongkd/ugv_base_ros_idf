@@ -248,7 +248,7 @@ esp_err_t servo_controller_move_home_position(void);
  * @param speed Movement speed
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t servo_controller_set_joint_angles(arm_joint_angles_t *angles, uint16_t speed);
+esp_err_t servo_controller_set_joint_angles(const arm_joint_angles_t *angles, uint16_t speed);
 
 /**
  * @brief Set RoArm-M2 pose
@@ -256,7 +256,7 @@ esp_err_t servo_controller_set_joint_angles(arm_joint_angles_t *angles, uint16_t
  * @param speed Movement speed
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t servo_controller_set_pose(arm_pose_t *pose, uint16_t speed);
+esp_err_t servo_controller_set_pose(const arm_pose_t *pose, uint16_t speed);
 
 /**
  * @brief Get RoArm-M2 current pose
@@ -326,6 +326,72 @@ esp_err_t servo_controller_set_end_effector_mode(uint8_t mode);
  */
 esp_err_t servo_controller_config_end_effector(uint8_t position, float ea, float eb);
 
+/**
+ * @brief Arm UI control (E, Z, R parameters)
+ * @param e E parameter
+ * @param z Z parameter
+ * @param r R parameter
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t servo_controller_arm_ui_control(float e, float z, float r);
+
+/**
+ * @brief Set joint PID parameters
+ * @param joint Joint ID (0-3)
+ * @param p Proportional gain
+ * @param i Integral gain
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t servo_controller_set_joint_pid(uint8_t joint, float p, float i);
+
+/**
+ * @brief Reset all PID parameters to default
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t servo_controller_reset_pid(void);
+
+/**
+ * @brief Initialize arm movement
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t servo_controller_move_init(void);
+
+/**
+ * @brief Get servo feedback data
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t servo_controller_get_feedback(void);
+
+/**
+ * @brief Control torque for all servos
+ * @param enable True to enable torque, false to disable
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t servo_controller_torque_control(bool enable);
+
+/**
+ * @brief Change servo ID
+ * @param old_id Current servo ID
+ * @param new_id New servo ID
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t servo_controller_change_id(uint8_t old_id, uint8_t new_id);
+
+/**
+ * @brief Set servo middle position
+ * @param servo_id Servo ID
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t servo_controller_set_middle_position(uint8_t servo_id);
+
+/**
+ * @brief Set servo PID parameters
+ * @param servo_id Servo ID
+ * @param p Proportional gain
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t servo_controller_set_servo_pid(uint8_t servo_id, float p);
+
 // Utility functions
 
 /**
@@ -381,8 +447,16 @@ esp_err_t servo_controller_get_voltage(uint8_t servo_id, uint16_t *voltage);
  */
 esp_err_t servo_controller_get_load(uint8_t servo_id, uint16_t *load);
 
+/**
+ * @brief Send servo error feedback
+ * @param servo_id Servo ID
+ * @param error_status Error status code
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t servo_controller_send_error_feedback(uint8_t servo_id, uint8_t error_status);
+
 // Global variables (extern declarations)
-extern servo_feedback_t servo_feedback[5];  // Array for 5 servos (11-15)
+// servo_feedback array is defined as static in servo_controller.cpp
 extern bool RoArmM2_initCheckSucceed;
 extern arm_joint_config_t arm_joint_config[4];  // 4 joints (base, shoulder, elbow, gripper)
 

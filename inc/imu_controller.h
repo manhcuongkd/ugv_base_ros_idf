@@ -238,6 +238,46 @@ bool imu_controller_data_available(void);
  */
 const imu_data_t* imu_controller_get_data(void);
 
+/**
+ * @brief Set IMU offset values
+ * @param gx Gyroscope X offset
+ * @param gy Gyroscope Y offset
+ * @param gz Gyroscope Z offset
+ * @param ax Accelerometer X offset
+ * @param ay Accelerometer Y offset
+ * @param az Accelerometer Z offset
+ * @param cx Magnetometer X offset
+ * @param cy Magnetometer Y offset
+ * @param cz Magnetometer Z offset
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t imu_controller_set_offset(float gx, float gy, float gz, 
+                                   float ax, float ay, float az,
+                                   float cx, float cy, float cz);
+
+/**
+ * @brief Get IMU offset values
+ * @param gx Pointer to gyroscope X offset
+ * @param gy Pointer to gyroscope Y offset
+ * @param gz Pointer to gyroscope Z offset
+ * @param ax Pointer to accelerometer X offset
+ * @param ay Pointer to accelerometer Y offset
+ * @param az Pointer to accelerometer Z offset
+ * @param cx Pointer to magnetometer X offset
+ * @param cy Pointer to magnetometer Y offset
+ * @param cz Pointer to magnetometer Z offset
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t imu_controller_get_offset(float *gx, float *gy, float *gz,
+                                   float *ax, float *ay, float *az,
+                                   float *cx, float *cy, float *cz);
+
+/**
+ * @brief Get current IMU data and log it
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t imu_controller_get_data_log(void);
+
 // Default IMU Configuration
 #define DEFAULT_IMU_SAMPLE_RATE_HZ  100
 #define DEFAULT_IMU_ACCEL_RANGE     2      // ±2g

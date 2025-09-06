@@ -1,5 +1,6 @@
 #include "../inc/oled_controller.h"
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <driver/i2c.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -14,9 +15,17 @@ static const char *TAG = "OLEDController";
 // Global variable definition
 oled_state_t oled_state;
 
+// Default display lines (Arduino-style)
+oled_line_t screen_line_0;
+oled_line_t screen_line_1;
+oled_line_t screen_line_2;
+oled_line_t screen_line_3;
+
 // Private variables
 static bool oled_initialized = false;
 static uint8_t oled_buffer[OLED_WIDTH * OLED_HEIGHT / 8];
+static bool screen_default_mode = true;  // Arduino-style default mode flag
+static uint32_t last_info_update_time = 0;  // For periodic updates
 
 // Private function prototypes
 static esp_err_t oled_write_command(uint8_t cmd);
@@ -90,6 +99,34 @@ esp_err_t oled_controller_init(void) {
     oled_state.display_on = true;
     oled_state.brightness = 255;
     oled_state.last_update = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    
+    // Initialize default screen lines (Arduino-style)
+    strncpy(screen_line_0.text, "RaspRover IDF", OLED_MAX_CHARS_PER_LINE);
+    screen_line_0.text[OLED_MAX_CHARS_PER_LINE] = '\0';
+    screen_line_0.updated = true;
+    screen_line_0.timestamp = esp_timer_get_time() / 1000;
+    
+    strncpy(screen_line_1.text, "Initializing...", OLED_MAX_CHARS_PER_LINE);
+    screen_line_1.text[OLED_MAX_CHARS_PER_LINE] = '\0';
+    screen_line_1.updated = true;
+    screen_line_1.timestamp = esp_timer_get_time() / 1000;
+    
+    strncpy(screen_line_2.text, "Please wait...", OLED_MAX_CHARS_PER_LINE);
+    screen_line_2.text[OLED_MAX_CHARS_PER_LINE] = '\0';
+    screen_line_2.updated = true;
+    screen_line_2.timestamp = esp_timer_get_time() / 1000;
+    
+    strncpy(screen_line_3.text, "V:12.0V Ready", OLED_MAX_CHARS_PER_LINE);
+    screen_line_3.text[OLED_MAX_CHARS_PER_LINE] = '\0';
+    screen_line_3.updated = true;
+    screen_line_3.timestamp = esp_timer_get_time() / 1000;
+    
+    // Initialize oled_state lines
+    for (int i = 0; i < OLED_MAX_LINES; i++) {
+        oled_state.lines[i].text[0] = '\0';
+        oled_state.lines[i].updated = false;
+        oled_state.lines[i].timestamp = 0;
+    }
     
     oled_initialized = true;
     ESP_LOGI(TAG, "OLED controller initialized successfully");
@@ -226,4 +263,174 @@ static void oled_draw_string(uint8_t x, uint8_t y, const char *str) {
         current_x += 6;
         str++;
     }
+}
+
+esp_err_t oled_controller_set_text(uint8_t line_num, const char *text) {
+    if (!oled_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (line_num >= OLED_MAX_LINES || !text) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    ESP_LOGI(TAG, "Setting OLED line %d text: %s", line_num, text);
+    
+    // Copy text to line buffer (truncate if too long)
+    strncpy(oled_state.lines[line_num].text, text, OLED_MAX_CHARS_PER_LINE);
+    oled_state.lines[line_num].text[OLED_MAX_CHARS_PER_LINE] = '\0';
+    oled_state.lines[line_num].updated = true;
+    oled_state.lines[line_num].timestamp = esp_timer_get_time() / 1000; // Convert to ms
+    
+    // Clear buffer and redraw all lines
+    oled_clear_buffer();
+    
+    for (uint8_t i = 0; i < OLED_MAX_LINES; i++) {
+        if (oled_state.lines[i].text[0] != '\0') {
+            oled_draw_string(0, i * 8, oled_state.lines[i].text);
+        }
+    }
+    
+    // Update display
+    oled_set_position(0, 0);
+    for (uint16_t i = 0; i < sizeof(oled_buffer); i++) {
+        oled_write_data(oled_buffer[i]);
+    }
+    
+    ESP_LOGI(TAG, "OLED text updated successfully");
+    return ESP_OK;
+}
+
+esp_err_t oled_controller_reset_to_default(void) {
+    if (!oled_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    ESP_LOGI(TAG, "Resetting OLED to default mode");
+    
+    // Switch to default mode (Arduino-style)
+    screen_default_mode = true;
+    
+    // Update voltage info (Arduino-style)
+    // Note: This would need battery controller integration
+    // For now, just set a placeholder
+    strncpy(screen_line_3.text, "V:12.0V Ready", OLED_MAX_CHARS_PER_LINE);
+    screen_line_3.text[OLED_MAX_CHARS_PER_LINE] = '\0';
+    screen_line_3.updated = true;
+    screen_line_3.timestamp = esp_timer_get_time() / 1000;
+    
+    // Update display with default lines
+    oled_clear_buffer();
+    
+    // Display all default lines
+    if (screen_line_0.text[0] != '\0') {
+        oled_draw_string(0, 0, screen_line_0.text);
+    }
+    if (screen_line_1.text[0] != '\0') {
+        oled_draw_string(0, 8, screen_line_1.text);
+    }
+    if (screen_line_2.text[0] != '\0') {
+        oled_draw_string(0, 16, screen_line_2.text);
+    }
+    if (screen_line_3.text[0] != '\0') {
+        oled_draw_string(0, 24, screen_line_3.text);
+    }
+    
+    // Update display
+    oled_set_position(0, 0);
+    for (uint16_t i = 0; i < sizeof(oled_buffer); i++) {
+        oled_write_data(oled_buffer[i]);
+    }
+    
+    // Update timestamp for periodic updates
+    last_info_update_time = esp_timer_get_time() / 1000;
+    
+    ESP_LOGI(TAG, "OLED reset to default mode successfully");
+    return ESP_OK;
+}
+
+// Arduino-style OLED control function
+esp_err_t oled_controller_control(uint8_t line_num, const char *text) {
+    if (!oled_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (line_num >= OLED_MAX_LINES || !text) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    ESP_LOGI(TAG, "OLED control: line=%d, text=%s", line_num, text);
+    
+    // Switch to custom mode (Arduino-style)
+    screen_default_mode = false;
+    
+    // Set custom line text
+    strncpy(oled_state.lines[line_num].text, text, OLED_MAX_CHARS_PER_LINE);
+    oled_state.lines[line_num].text[OLED_MAX_CHARS_PER_LINE] = '\0';
+    oled_state.lines[line_num].updated = true;
+    oled_state.lines[line_num].timestamp = esp_timer_get_time() / 1000;
+    
+    // Clear display and show custom lines
+    oled_clear_buffer();
+    
+    for (uint8_t i = 0; i < OLED_MAX_LINES; i++) {
+        if (oled_state.lines[i].text[0] != '\0') {
+            oled_draw_string(0, i * 8, oled_state.lines[i].text);
+        }
+    }
+    
+    // Update display
+    oled_set_position(0, 0);
+    for (uint16_t i = 0; i < sizeof(oled_buffer); i++) {
+        oled_write_data(oled_buffer[i]);
+    }
+    
+    ESP_LOGI(TAG, "OLED custom display updated");
+    return ESP_OK;
+}
+
+// Arduino-style periodic info update
+esp_err_t oled_controller_info_update(void) {
+    if (!oled_initialized || !screen_default_mode) {
+        return ESP_OK;  // Only update in default mode
+    }
+    
+    uint32_t current_time = esp_timer_get_time() / 1000;
+    
+    // Update every 10 seconds (Arduino-style)
+    if (current_time - last_info_update_time < 10000) {
+        return ESP_OK;
+    }
+    
+    // Update voltage info (Arduino-style)
+    // Note: This would need battery controller integration
+    // For now, just update with placeholder
+    strncpy(screen_line_3.text, "V:12.0V Ready", OLED_MAX_CHARS_PER_LINE);
+    screen_line_3.text[OLED_MAX_CHARS_PER_LINE] = '\0';
+    screen_line_3.updated = true;
+    screen_line_3.timestamp = current_time;
+    
+    // Update display
+    oled_clear_buffer();
+    
+    if (screen_line_0.text[0] != '\0') {
+        oled_draw_string(0, 0, screen_line_0.text);
+    }
+    if (screen_line_1.text[0] != '\0') {
+        oled_draw_string(0, 8, screen_line_1.text);
+    }
+    if (screen_line_2.text[0] != '\0') {
+        oled_draw_string(0, 16, screen_line_2.text);
+    }
+    if (screen_line_3.text[0] != '\0') {
+        oled_draw_string(0, 24, screen_line_3.text);
+    }
+    
+    oled_set_position(0, 0);
+    for (uint16_t i = 0; i < sizeof(oled_buffer); i++) {
+        oled_write_data(oled_buffer[i]);
+    }
+    
+    last_info_update_time = current_time;
+    return ESP_OK;
 }

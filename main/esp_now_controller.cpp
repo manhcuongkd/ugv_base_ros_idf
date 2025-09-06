@@ -550,3 +550,181 @@ void esp_now_controller_flow_control_task(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(esp_now_control.flow_control_interval_ms));
     }
 }
+
+esp_err_t esp_now_controller_set_broadcast_mode(uint8_t mode, const char *mac) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "Setting broadcast mode: %d, MAC: %s", mode, mac);
+
+    // Set broadcast mode
+    esp_now_control.mode = mode;
+
+    // If MAC is provided, add it as a follower
+    if (mac && strlen(mac) > 0) {
+        uint8_t mac_bytes[6];
+        if (esp_now_string_to_mac(mac, mac_bytes) == ESP_OK) {
+            esp_now_controller_add_peer(mac_bytes);
+        } else {
+            ESP_LOGE(TAG, "Invalid MAC address format: %s", mac);
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+
+    ESP_LOGI(TAG, "Broadcast mode set successfully");
+    return ESP_OK;
+}
+
+esp_err_t esp_now_controller_get_mac_address(char *mac_str) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (mac_str == NULL) {
+        ESP_LOGE(TAG, "Invalid MAC string buffer");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Get this device's MAC address
+    uint8_t mac[6];
+    esp_now_controller_get_this_mac(mac);
+    
+    // Convert to string
+    char *mac_string = esp_now_mac_to_string(mac);
+    if (mac_string) {
+        strncpy(mac_str, mac_string, 18);
+        mac_str[17] = '\0'; // Ensure null termination
+        free(mac_string);
+        
+        ESP_LOGI(TAG, "Device MAC address: %s", mac_str);
+        return ESP_OK;
+    } else {
+        ESP_LOGE(TAG, "Failed to convert MAC to string");
+        return ESP_FAIL;
+    }
+}
+
+esp_err_t esp_now_controller_send_recv_feedback(const char *mac, const char *message) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (mac == NULL || message == NULL) {
+        ESP_LOGE(TAG, "Invalid parameters");
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Create feedback JSON
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "T", CMD_ESP_NOW_RECV);
+    cJSON_AddStringToObject(json, "mac", mac);
+    cJSON_AddStringToObject(json, "megs", message);
+    
+    char *json_string = cJSON_Print(json);
+    if (json_string) {
+        // Send via UART (matching original Arduino behavior)
+        printf("%s\n", json_string);
+        free(json_string);
+    }
+    
+    cJSON_Delete(json);
+    ESP_LOGI(TAG, "ESP-NOW receive feedback sent: MAC=%s, Message=%s", mac, message);
+    return ESP_OK;
+}
+
+esp_err_t esp_now_controller_send_send_feedback(const char *mac, int status, const char *message) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (mac == NULL || message == NULL) {
+        ESP_LOGE(TAG, "Invalid parameters");
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Create feedback JSON
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "T", CMD_ESP_NOW_SEND);
+    cJSON_AddStringToObject(json, "mac", mac);
+    cJSON_AddNumberToObject(json, "status", status);
+    cJSON_AddStringToObject(json, "megs", message);
+    
+    char *json_string = cJSON_Print(json);
+    if (json_string) {
+        // Send via UART (matching original Arduino behavior)
+        printf("%s\n", json_string);
+        free(json_string);
+    }
+    
+    cJSON_Delete(json);
+    ESP_LOGI(TAG, "ESP-NOW send feedback sent: MAC=%s, Status=%d, Message=%s", mac, status, message);
+    return ESP_OK;
+}
+
+esp_err_t esp_now_string_to_mac(const char *mac_string, uint8_t *mac_bytes) {
+    if (!mac_string || !mac_bytes) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    ESP_LOGI(TAG, "Converting MAC string to bytes: %s", mac_string);
+    
+    // Parse MAC address string (format: "XX:XX:XX:XX:XX:XX")
+    int values[6];
+    if (sscanf(mac_string, "%02x:%02x:%02x:%02x:%02x:%02x",
+               &values[0], &values[1], &values[2], &values[3], &values[4], &values[5]) != 6) {
+        ESP_LOGE(TAG, "Invalid MAC address format: %s", mac_string);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    for (int i = 0; i < 6; i++) {
+        mac_bytes[i] = (uint8_t)values[i];
+    }
+    
+    ESP_LOGI(TAG, "MAC converted successfully");
+    return ESP_OK;
+}
+
+esp_err_t esp_now_controller_get_this_mac(uint8_t *mac) {
+    if (!mac) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    ESP_LOGI(TAG, "Getting this device MAC address");
+    
+    // Get WiFi MAC address
+    esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, mac);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get MAC address: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    ESP_LOGI(TAG, "MAC address retrieved successfully");
+    return ESP_OK;
+}
+
+char* esp_now_mac_to_string(const uint8_t *mac) {
+    if (!mac) {
+        return NULL;
+    }
+    
+    ESP_LOGI(TAG, "Converting MAC bytes to string");
+    
+    // Allocate memory for MAC string
+    char *mac_string = (char*)malloc(18); // "XX:XX:XX:XX:XX:XX" + null terminator
+    if (!mac_string) {
+        ESP_LOGE(TAG, "Failed to allocate memory for MAC string");
+        return NULL;
+    }
+    
+    // Format MAC address
+    snprintf(mac_string, 18, "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    
+    ESP_LOGI(TAG, "MAC string created: %s", mac_string);
+    return mac_string;
+}

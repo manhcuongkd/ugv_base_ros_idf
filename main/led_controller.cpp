@@ -320,3 +320,14 @@ static void led_update_color(void) {
     led_set_pwm_duty(LEDC_CHANNEL_1, green_duty);
     led_set_pwm_duty(LEDC_CHANNEL_2, blue_duty);
 }
+
+esp_err_t led_controller_set_rgb(uint8_t red, uint8_t green, uint8_t blue) {
+    ESP_LOGI(TAG, "Setting RGB LED: R=%d, G=%d, B=%d", red, green, blue);
+    
+    // Set PWM duty cycles directly
+    led_set_pwm_duty(LEDC_CHANNEL_0, red);
+    led_set_pwm_duty(LEDC_CHANNEL_1, green);
+    led_set_pwm_duty(LEDC_CHANNEL_2, blue);
+    
+    return ESP_OK;
+}

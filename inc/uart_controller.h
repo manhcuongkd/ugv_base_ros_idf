@@ -13,6 +13,7 @@ extern "C" {
 esp_err_t uart_controller_init(void);
 esp_err_t uart_controller_deinit(void);
 void uart_controller_task(void *pvParameters);
+esp_err_t uart_controller_parse_command(const char *data, size_t len);
 
 #ifdef __cplusplus
 }

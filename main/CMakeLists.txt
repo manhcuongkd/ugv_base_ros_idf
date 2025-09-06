@@ -16,6 +16,7 @@ idf_component_register(SRCS "main.cpp"
                            "esp_now_controller.cpp"
                            "files_controller.cpp"
                            "gimbal_controller.cpp"
+                           "system_info.cpp"
                     INCLUDE_DIRS "." "../inc")
 
 # Set C++ standard

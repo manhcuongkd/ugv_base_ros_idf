@@ -2,6 +2,7 @@
 
 # RaspRover IDF Dependencies Installation Script
 # This script automatically installs all required dependencies
+# Supports both ESP-IDF v4.4 and v5.0+
 
 set -e  # Exit on any error
 
@@ -35,10 +36,19 @@ check_idf() {
         print_error "ESP-IDF not found in PATH"
         print_status "Please install ESP-IDF or source the environment:"
         print_status "source \$HOME/esp/esp-idf/export.sh"
+        print_status "or for ESP-IDF v5: source \$HOME/esp/esp-idf-v5/export.sh"
         exit 1
     fi
     
-    print_success "ESP-IDF found: $(idf.py --version)"
+    current_version=$(idf.py --version 2>/dev/null || echo "unknown")
+    print_success "ESP-IDF found: $current_version"
+    
+    # Check if it's a supported version
+    if [[ "$current_version" == *"v4.4"* ]] || [[ "$current_version" == *"v5.0"* ]] || [[ "$current_version" == *"v5.1"* ]] || [[ "$current_version" == *"v5.2"* ]]; then
+        print_success "ESP-IDF version is supported"
+    else
+        print_warning "ESP-IDF version may not be fully supported. Recommended: v4.4.5 or v5.0+"
+    fi
 }
 
 # Function to check if git is available

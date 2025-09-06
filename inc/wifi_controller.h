@@ -197,6 +197,64 @@ esp_err_t wifi_controller_set_protocol(uint8_t protocol);
 esp_err_t wifi_controller_get_protocol(uint8_t *protocol);
 
 /**
+ * @brief Set WiFi AP configuration
+ * @param ssid AP SSID
+ * @param password AP password
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t wifi_controller_set_ap_config(const char *ssid, const char *password);
+
+/**
+ * @brief Set WiFi STA configuration
+ * @param ssid STA SSID
+ * @param password STA password
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t wifi_controller_set_sta_config(const char *ssid, const char *password);
+
+/**
+ * @brief Set WiFi AP+STA configuration
+ * @param ap_ssid AP SSID
+ * @param ap_password AP password
+ * @param sta_ssid STA SSID
+ * @param sta_password STA password
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t wifi_controller_set_ap_sta_config(const char *ap_ssid, const char *ap_password,
+                                           const char *sta_ssid, const char *sta_password);
+
+/**
+ * @brief Set WiFi boot mode
+ * @param mode Boot mode (0=AP, 1=STA, 2=AP+STA, 3=OFF)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t wifi_controller_set_boot_mode(uint8_t mode);
+
+/**
+ * @brief Get WiFi information
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t wifi_controller_get_info(void);
+
+/**
+ * @brief Create WiFi config by current status
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t wifi_controller_create_config_by_status(void);
+
+/**
+ * @brief Create WiFi config by input parameters
+ * @param mode WiFi mode
+ * @param ap_ssid AP SSID
+ * @param ap_password AP password
+ * @param sta_ssid STA SSID
+ * @param sta_password STA password
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t wifi_controller_create_config_by_input(uint8_t mode, const char *ap_ssid, const char *ap_password,
+                                                const char *sta_ssid, const char *sta_password);
+
+/**
  * @brief Set WiFi bandwidth
  * @param bandwidth Bandwidth (20/40 MHz)
  * @return ESP_OK on success, error code otherwise

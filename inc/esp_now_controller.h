@@ -67,12 +67,44 @@ esp_err_t esp_now_controller_set_flow_control_interval(uint32_t interval_ms);
 // Utility functions
 char* esp_now_mac_to_string(const uint8_t *mac);
 esp_err_t esp_now_string_to_mac(const char *mac_str, uint8_t *mac);
-void esp_now_controller_get_this_mac(uint8_t *mac);
+esp_err_t esp_now_controller_get_this_mac(uint8_t *mac);
 
 // Internal functions
 void esp_now_controller_task(void *pvParameters);
 void esp_now_controller_flow_control_task(void *pvParameters);
 void esp_now_controller_on_data_sent(const esp_now_send_cb_t *cb, esp_now_send_status_t status);
 void esp_now_controller_on_data_recv(const esp_now_recv_cb_t *cb, const uint8_t *data, int data_len);
+
+/**
+ * @brief Set broadcast mode and follower MAC
+ * @param mode Broadcast mode
+ * @param mac Follower MAC address
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_set_broadcast_mode(uint8_t mode, const char *mac);
+
+/**
+ * @brief Get this device's MAC address
+ * @param mac_str Buffer for MAC address string
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_get_mac_address(char *mac_str);
+
+/**
+ * @brief Send ESP-NOW receive feedback
+ * @param mac MAC address of sender
+ * @param message Received message
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_send_recv_feedback(const char *mac, const char *message);
+
+/**
+ * @brief Send ESP-NOW send status feedback
+ * @param mac MAC address of recipient
+ * @param status Send status code
+ * @param message Status message
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_send_send_feedback(const char *mac, int status, const char *message);
 
 #endif // ESP_NOW_CONTROLLER_H

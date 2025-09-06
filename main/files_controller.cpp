@@ -783,4 +783,284 @@ static esp_err_t files_create_default_files(void)
     return ESP_OK;
 }
 
+esp_err_t files_controller_append_line(const char *filename, const char *content)
+{
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (filename == NULL || content == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char filepath[128];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+
+    FILE *file = fopen(filepath, "a");
+    if (file == NULL) {
+        ESP_LOGE(TAG, "Failed to open file %s for appending", filename);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    fprintf(file, "%s\n", content);
+    fclose(file);
+
+    ESP_LOGI(TAG, "Line appended to file %s: %s", filename, content);
+    return ESP_OK;
+}
+
+esp_err_t files_controller_read_line(const char *filename, int line_num, char *content, size_t max_len) {
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (filename == NULL || content == NULL || max_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    if (line_num < 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    ESP_LOGI(TAG, "Reading line %d from file: %s", line_num, filename);
+    
+    char filepath[128];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+    
+    // Open file for reading
+    FILE *file = fopen(filepath, "r");
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open file for reading: %s", filename);
+        return ESP_FAIL;
+    }
+    
+    // Read lines until we reach the desired line number
+    int current_line = 1;
+    char line_buffer[256];
+    
+    while (current_line < line_num && fgets(line_buffer, sizeof(line_buffer), file)) {
+        current_line++;
+    }
+    
+    // Check if we found the line
+    if (current_line == line_num && fgets(line_buffer, sizeof(line_buffer), file)) {
+        // Remove newline character if present
+        size_t len = strlen(line_buffer);
+        if (len > 0 && line_buffer[len - 1] == '\n') {
+            line_buffer[len - 1] = '\0';
+        }
+        
+        // Copy to output buffer
+        strncpy(content, line_buffer, max_len - 1);
+        content[max_len - 1] = '\0';
+        
+        fclose(file);
+    ESP_LOGI(TAG, "Line %d read successfully: %s", line_num, content);
+    return ESP_OK;
+} else {
+    fclose(file);
+    ESP_LOGE(TAG, "Line %d not found in file: %s", line_num, filename);
+    return ESP_ERR_NOT_FOUND;
+}
+}
+
+esp_err_t files_controller_insert_line(const char *filename, int line_num, const char *content) {
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (filename == NULL || content == NULL || line_num < 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    ESP_LOGI(TAG, "Inserting line %d in file: %s", line_num, filename);
+    
+    char filepath[128];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+    
+    // Read all lines into memory
+    FILE *file = fopen(filepath, "r");
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open file for reading: %s", filename);
+        return ESP_FAIL;
+    }
+    
+    char lines[100][256]; // Support up to 100 lines, 256 chars each
+    int line_count = 0;
+    char line_buffer[256];
+    
+    while (fgets(line_buffer, sizeof(line_buffer), file) && line_count < 100) {
+        // Remove newline if present
+        size_t len = strlen(line_buffer);
+        if (len > 0 && line_buffer[len - 1] == '\n') {
+            line_buffer[len - 1] = '\0';
+        }
+        strcpy(lines[line_count], line_buffer);
+        line_count++;
+    }
+    fclose(file);
+    
+    // Insert new line
+    if (line_num > line_count + 1) {
+        ESP_LOGE(TAG, "Line number %d exceeds file length %d", line_num, line_count);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Shift lines down
+    for (int i = line_count; i >= line_num; i--) {
+        if (i < 100) {
+            strcpy(lines[i], lines[i - 1]);
+        }
+    }
+    
+    // Insert new content
+    strcpy(lines[line_num - 1], content);
+    line_count++;
+    
+    // Write back to file
+    file = fopen(filepath, "w");
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open file for writing: %s", filename);
+        return ESP_FAIL;
+    }
+    
+    for (int i = 0; i < line_count; i++) {
+        fprintf(file, "%s\n", lines[i]);
+    }
+    fclose(file);
+    
+    ESP_LOGI(TAG, "Line inserted successfully at position %d", line_num);
+    return ESP_OK;
+}
+
+esp_err_t files_controller_replace_line(const char *filename, int line_num, const char *content) {
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (filename == NULL || content == NULL || line_num < 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    ESP_LOGI(TAG, "Replacing line %d in file: %s", line_num, filename);
+    
+    char filepath[128];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+    
+    // Read all lines into memory
+    FILE *file = fopen(filepath, "r");
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open file for reading: %s", filename);
+        return ESP_FAIL;
+    }
+    
+    char lines[100][256]; // Support up to 100 lines, 256 chars each
+    int line_count = 0;
+    char line_buffer[256];
+    
+    while (fgets(line_buffer, sizeof(line_buffer), file) && line_count < 100) {
+        // Remove newline if present
+        size_t len = strlen(line_buffer);
+        if (len > 0 && line_buffer[len - 1] == '\n') {
+            line_buffer[len - 1] = '\0';
+        }
+        strcpy(lines[line_count], line_buffer);
+        line_count++;
+    }
+    fclose(file);
+    
+    // Check if line exists
+    if (line_num > line_count) {
+        ESP_LOGE(TAG, "Line number %d exceeds file length %d", line_num, line_count);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Replace line
+    strcpy(lines[line_num - 1], content);
+    
+    // Write back to file
+    file = fopen(filepath, "w");
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open file for writing: %s", filename);
+        return ESP_FAIL;
+    }
+    
+    for (int i = 0; i < line_count; i++) {
+        fprintf(file, "%s\n", lines[i]);
+    }
+    fclose(file);
+    
+    ESP_LOGI(TAG, "Line replaced successfully at position %d", line_num);
+    return ESP_OK;
+}
+
+esp_err_t files_controller_delete_line(const char *filename, int line_num) {
+    if (!files_initialized) {
+        ESP_LOGE(TAG, "Files controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (filename == NULL || line_num < 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    ESP_LOGI(TAG, "Deleting line %d from file: %s", line_num, filename);
+    
+    char filepath[128];
+    snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
+    
+    // Read all lines into memory
+    FILE *file = fopen(filepath, "r");
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open file for reading: %s", filename);
+        return ESP_FAIL;
+    }
+    
+    char lines[100][256]; // Support up to 100 lines, 256 chars each
+    int line_count = 0;
+    char line_buffer[256];
+    
+    while (fgets(line_buffer, sizeof(line_buffer), file) && line_count < 100) {
+        // Remove newline if present
+        size_t len = strlen(line_buffer);
+        if (len > 0 && line_buffer[len - 1] == '\n') {
+            line_buffer[len - 1] = '\0';
+        }
+        strcpy(lines[line_count], line_buffer);
+        line_count++;
+    }
+    fclose(file);
+    
+    // Check if line exists
+    if (line_num > line_count) {
+        ESP_LOGE(TAG, "Line number %d exceeds file length %d", line_num, line_count);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Shift lines up
+    for (int i = line_num - 1; i < line_count - 1; i++) {
+        strcpy(lines[i], lines[i + 1]);
+    }
+    line_count--;
+    
+    // Write back to file
+    file = fopen(filepath, "w");
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open file for writing: %s", filename);
+        return ESP_FAIL;
+    }
+    
+    for (int i = 0; i < line_count; i++) {
+        fprintf(file, "%s\n", lines[i]);
+    }
+    fclose(file);
+    
+    ESP_LOGI(TAG, "Line deleted successfully from position %d", line_num);
+    return ESP_OK;
+}
+
 

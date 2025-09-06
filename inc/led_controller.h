@@ -206,6 +206,15 @@ esp_err_t led_controller_update(void);
 esp_err_t led_controller_set_pwm(uint8_t channel, uint8_t duty_cycle);
 
 /**
+ * @brief Set RGB LED control (simple version for UART commands)
+ * @param red Red component (0-255)
+ * @param green Green component (0-255)
+ * @param blue Blue component (0-255)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t led_controller_set_rgb(uint8_t red, uint8_t green, uint8_t blue);
+
+/**
  * @brief Enable/disable LED
  * @param enable True to enable, false to disable
  * @return ESP_OK on success, error code otherwise

@@ -9,19 +9,19 @@
 extern "C" {
 #endif
 
-// Pin definitions for RaspRover
-#define AIN1 GPIO_NUM_32      // Left motor direction 1
-#define AIN2 GPIO_NUM_33      // Left motor direction 2
+// Pin definitions for RaspRover (matching Arduino)
+#define AIN1 GPIO_NUM_21      // Left motor direction 1
+#define AIN2 GPIO_NUM_17      // Left motor direction 2
 #define PWMA GPIO_NUM_25      // Left motor PWM
-#define BIN1 GPIO_NUM_26      // Right motor direction 1
-#define BIN2 GPIO_NUM_27      // Right motor direction 2
-#define PWMB GPIO_NUM_14      // Right motor PWM
+#define BIN1 GPIO_NUM_22      // Right motor direction 1
+#define BIN2 GPIO_NUM_23      // Right motor direction 2
+#define PWMB GPIO_NUM_26      // Right motor PWM
 
-// Encoder pins
-#define LEFT_ENCODER_A GPIO_NUM_34
-#define LEFT_ENCODER_B GPIO_NUM_35
-#define RIGHT_ENCODER_A GPIO_NUM_36
-#define RIGHT_ENCODER_B GPIO_NUM_39
+// Encoder pins (matching Arduino)
+#define AENCA GPIO_NUM_35     // Left encoder A
+#define AENCB GPIO_NUM_34     // Left encoder B
+#define BENCA GPIO_NUM_27     // Right encoder A
+#define BENCB GPIO_NUM_16     // Right encoder B
 
 // I2C pins
 #define S_SDA GPIO_NUM_21
@@ -72,9 +72,25 @@ extern "C" {
 #define PID_SAMPLE_TIME_MS     20
 #define PID_OUTPUT_LIMIT       255
 
-// Motor configuration
+// Motor configuration (matching Arduino)
 #define MOTOR_MAX_SPEED        1.0f    // m/s
 #define MOTOR_MAX_ANGULAR      3.14f   // rad/s
+
+// Motion constants (from Arduino implementation)
+#define WHEEL_D                0.0800  // Wheel diameter in meters
+#define ONE_CIRCLE_PLUSES      660     // Encoder pulses per wheel revolution
+#define TRACK_WIDTH            0.172   // Distance between wheels in meters
+#define SET_MOTOR_DIR          false   // Motor direction flag
+
+// PWM frequency (matching Arduino)
+#define PWM_FREQ_ARDUINO       100000  // 100kHz PWM frequency
+
+// PID constants (matching Arduino)
+#define PID_KP                 200.0f  // Proportional gain
+#define PID_KI                 2500.0f // Integral gain
+#define PID_KD                 0.0f    // Derivative gain
+#define PID_THRESHOLD_PWM      5       // Minimum PWM threshold
+#define PID_WINDUP_LIMITS      100.0f  // Integral windup limits
 
 // IMU configuration
 #define IMU_SAMPLE_RATE_HZ     100

@@ -36,6 +36,9 @@ bool move_to_step(const char *name, int step_num);
 void mission_play(const char *name, int repeat_times);
 bool serial_mission_abort(void);
 
+// Internal functions
+void mission_playback_task(void *pvParameters);
+
 #ifdef __cplusplus
 }
 #endif

@@ -493,9 +493,24 @@ bool imu_controller_data_available(void)
         return false;
     }
     
-    // Check if new data is available from the sensor
-    // This is a simplified check - in a real implementation, you'd check the sensor's status register
-    return (esp_timer_get_time() - last_data_update) < (1000000 / DEFAULT_IMU_SAMPLE_RATE_HZ);
+    // Arduino-style IMU data availability check
+    // Based on ICM20948 DMP FIFO status from Arduino project
+    
+    // In Arduino: myICM.readDMPdataFromFIFO(&data) and check myICM.status
+    // The Arduino checks: (myICM.status == ICM_20948_Stat_Ok) || (myICM.status == ICM_20948_Stat_FIFOMoreDataAvail)
+    
+    // For ESP-IDF implementation, we would:
+    // 1. Check ICM20948 FIFO status register
+    // 2. Verify DMP data is ready
+    // 3. Check if new quaternion/accelerometer/gyroscope data is available
+    
+    // Simulate Arduino-style timing check (DMP runs at ~55Hz)
+    uint64_t current_time = esp_timer_get_time();
+    uint64_t time_since_last_update = current_time - last_data_update;
+    uint64_t expected_interval = 1000000 / DEFAULT_IMU_SAMPLE_RATE_HZ; // ~18ms for 55Hz
+    
+    // Return true if enough time has passed (Arduino-style timing)
+    return time_since_last_update >= expected_interval;
 }
 
 const imu_data_t* imu_controller_get_data(void)
@@ -764,4 +779,114 @@ static void imu_calibration_task(void *pvParameters)
     
     // Delete task
     vTaskDelete(NULL);
+}
+
+esp_err_t imu_controller_set_offset(float gx, float gy, float gz, 
+                                   float ax, float ay, float az,
+                                   float cx, float cy, float cz) {
+    if (!imu_initialized) {
+        ESP_LOGE(TAG, "IMU controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "Setting IMU offsets:");
+    ESP_LOGI(TAG, "Gyro: X=%.3f, Y=%.3f, Z=%.3f", gx, gy, gz);
+    ESP_LOGI(TAG, "Accel: X=%.3f, Y=%.3f, Z=%.3f", ax, ay, az);
+    ESP_LOGI(TAG, "Mag: X=%.3f, Y=%.3f, Z=%.3f", cx, cy, cz);
+
+    // Set gyroscope offsets
+    imu_calibration.gyro_bias_x = gx;
+    imu_calibration.gyro_bias_y = gy;
+    imu_calibration.gyro_bias_z = gz;
+    imu_calibration.gyro_calibrated = true;
+
+    // Set accelerometer offsets
+    imu_calibration.accel_bias_x = ax;
+    imu_calibration.accel_bias_y = ay;
+    imu_calibration.accel_bias_z = az;
+    imu_calibration.accel_calibrated = true;
+
+    // Set magnetometer offsets
+    imu_calibration.mag_bias_x = cx;
+    imu_calibration.mag_bias_y = cy;
+    imu_calibration.mag_bias_z = cz;
+    imu_calibration.mag_calibrated = true;
+
+    // Save calibration to NVS
+    esp_err_t ret = imu_controller_save_calibration();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save calibration: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "IMU offsets set and saved successfully");
+    return ESP_OK;
+}
+
+esp_err_t imu_controller_get_offset(float *gx, float *gy, float *gz,
+                                   float *ax, float *ay, float *az,
+                                   float *cx, float *cy, float *cz) {
+    if (!imu_initialized) {
+        ESP_LOGE(TAG, "IMU controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!gx || !gy || !gz || !ax || !ay || !az || !cx || !cy || !cz) {
+        ESP_LOGE(TAG, "Invalid pointer parameters");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Get gyroscope offsets
+    *gx = imu_calibration.gyro_bias_x;
+    *gy = imu_calibration.gyro_bias_y;
+    *gz = imu_calibration.gyro_bias_z;
+
+    // Get accelerometer offsets
+    *ax = imu_calibration.accel_bias_x;
+    *ay = imu_calibration.accel_bias_y;
+    *az = imu_calibration.accel_bias_z;
+
+    // Get magnetometer offsets
+    *cx = imu_calibration.mag_bias_x;
+    *cy = imu_calibration.mag_bias_y;
+    *cz = imu_calibration.mag_bias_z;
+
+    ESP_LOGI(TAG, "Retrieved IMU offsets:");
+    ESP_LOGI(TAG, "Gyro: X=%.3f, Y=%.3f, Z=%.3f", *gx, *gy, *gz);
+    ESP_LOGI(TAG, "Accel: X=%.3f, Y=%.3f, Z=%.3f", *ax, *ay, *az);
+    ESP_LOGI(TAG, "Mag: X=%.3f, Y=%.3f, Z=%.3f", *cx, *cy, *cz);
+
+    return ESP_OK;
+}
+
+esp_err_t imu_controller_get_data_log(void) {
+    if (!imu_initialized) {
+        ESP_LOGE(TAG, "IMU controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    ESP_LOGI(TAG, "Getting current IMU data");
+    
+    // Get current IMU data
+    imu_data_t imu_data;
+    esp_err_t ret = imu_controller_read_data(&imu_data);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read IMU data: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // Log the current IMU data
+    ESP_LOGI(TAG, "IMU Data - Accel: X=%.3f, Y=%.3f, Z=%.3f",
+             (float)imu_data.accel_x, (float)imu_data.accel_y, (float)imu_data.accel_z);
+    ESP_LOGI(TAG, "IMU Data - Gyro: X=%.3f, Y=%.3f, Z=%.3f",
+             (float)imu_data.gyro_x, (float)imu_data.gyro_y, (float)imu_data.gyro_z);
+    ESP_LOGI(TAG, "IMU Data - Mag: X=%.3f, Y=%.3f, Z=%.3f", 
+             (float)imu_data.mag_x, (float)imu_data.mag_y, (float)imu_data.mag_z);
+    ESP_LOGI(TAG, "IMU Data - Euler: Roll=%.2f, Pitch=%.2f, Yaw=%.2f", 
+             imu_data.roll, imu_data.pitch, imu_data.yaw);
+    ESP_LOGI(TAG, "IMU Data - Quat: W=%.3f, X=%.3f, Y=%.3f, Z=%.3f", 
+             imu_data.q0, imu_data.q1, imu_data.q2, imu_data.q3);
+    ESP_LOGI(TAG, "IMU Data - Temp: %.2f°C", imu_data.temperature);
+    
+    return ESP_OK;
 }

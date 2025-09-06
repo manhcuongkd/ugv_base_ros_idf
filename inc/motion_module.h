@@ -151,6 +151,38 @@ esp_err_t motion_module_reset_emergency(void);
 esp_err_t motion_module_set_pid_params(pid_controller_t *left_pid, pid_controller_t *right_pid);
 
 /**
+ * @brief Set PID parameters directly
+ * @param kp Proportional gain
+ * @param ki Integral gain
+ * @param kd Derivative gain
+ * @param limit Output limit
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t motion_module_set_pid_params_direct(float kp, float ki, float kd, float limit);
+
+/**
+ * @brief Get current speed rates
+ * @param left_rate Pointer to left speed rate
+ * @param right_rate Pointer to right speed rate
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t motion_module_get_speed_rates(float *left_rate, float *right_rate);
+
+/**
+ * @brief Save speed rates to NVS
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t motion_module_save_speed_rates(void);
+
+/**
+ * @brief Set module type
+ * @param main_type Main module type
+ * @param module_type Module type
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t motion_module_set_type(uint8_t main_type, uint8_t module_type);
+
+/**
  * @brief Get current motion status
  * @param status Pointer to motion control structure
  * @return ESP_OK on success, error code otherwise
@@ -195,11 +227,11 @@ esp_err_t motion_module_init_pwm(void);
  */
 esp_err_t motion_module_set_motor(uint8_t motor_id, int8_t direction, uint16_t pwm_value);
 
-// Global variables (extern declarations)
-extern pid_controller_t left_pid_controller;
-extern pid_controller_t right_pid_controller;
-extern encoder_data_t current_encoder_data;
-extern motion_control_t current_motion_status;
+// Global variables (defined as static in motion_module.cpp)
+// pid_controller_t left_pid_controller;
+// pid_controller_t right_pid_controller;
+// encoder_data_t current_encoder_data;
+// motion_control_t current_motion_status;
 
 #ifdef __cplusplus
 }

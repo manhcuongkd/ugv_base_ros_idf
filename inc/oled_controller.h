@@ -114,6 +114,20 @@ esp_err_t oled_controller_set_text(uint8_t line_num, const char *text);
 esp_err_t oled_controller_reset_to_default(void);
 
 /**
+ * @brief Arduino-style OLED control function
+ * @param line_num Line number (0-3)
+ * @param text Text to display
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t oled_controller_control(uint8_t line_num, const char *text);
+
+/**
+ * @brief Arduino-style periodic info update
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t oled_controller_info_update(void);
+
+/**
  * @brief Update display (refresh all lines)
  * @return ESP_OK on success, error code otherwise
  */

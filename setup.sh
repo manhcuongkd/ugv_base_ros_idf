@@ -2,6 +2,7 @@
 
 # RaspRover IDF Quick Setup Script
 # This script sets up the entire project environment
+# Supports both ESP-IDF v4.4 and v5.0+
 
 set -e  # Exit on any error
 
@@ -11,6 +12,10 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Default ESP-IDF version (can be overridden with IDF_VERSION environment variable)
+DEFAULT_IDF_VERSION="v4.4.5"
+IDF_VERSION=${IDF_VERSION:-$DEFAULT_IDF_VERSION}
 
 # Function to print colored output
 print_status() {
@@ -32,10 +37,11 @@ print_error() {
 # Function to check ESP-IDF installation
 check_idf_installation() {
     print_status "Checking ESP-IDF installation..."
+    print_status "Target ESP-IDF version: $IDF_VERSION"
     
     if ! command -v idf.py &> /dev/null; then
         print_error "ESP-IDF not found in PATH"
-        print_status "Installing ESP-IDF..."
+        print_status "Installing ESP-IDF $IDF_VERSION..."
         
         # Check if we're on Ubuntu/Debian
         if command -v apt-get &> /dev/null; then
@@ -46,13 +52,21 @@ check_idf_installation() {
             exit 1
         fi
     else
-        print_success "ESP-IDF found: $(idf.py --version)"
+        current_version=$(idf.py --version 2>/dev/null || echo "unknown")
+        print_success "ESP-IDF found: $current_version"
+        
+        # Check if we need to switch versions
+        if [[ "$current_version" != *"$IDF_VERSION"* ]]; then
+            print_warning "Current ESP-IDF version ($current_version) doesn't match target ($IDF_VERSION)"
+            print_status "Switching to ESP-IDF $IDF_VERSION..."
+            install_idf_ubuntu
+        fi
     fi
 }
 
 # Function to install ESP-IDF on Ubuntu/Debian
 install_idf_ubuntu() {
-    print_status "Installing ESP-IDF on Ubuntu/Debian..."
+    print_status "Installing ESP-IDF $IDF_VERSION on Ubuntu/Debian..."
     
     # Install prerequisites
     sudo apt-get update
@@ -79,28 +93,36 @@ install_idf_ubuntu() {
         dfu-util \
         libusb-1.0-0
     
-    # Clone ESP-IDF
-    if [ ! -d "$HOME/esp/esp-idf" ]; then
+    # Determine ESP-IDF directory based on version
+    if [[ "$IDF_VERSION" == "v5.0"* ]] || [[ "$IDF_VERSION" == "v5.1"* ]] || [[ "$IDF_VERSION" == "v5.2"* ]]; then
+        IDF_DIR="$HOME/esp/esp-idf-v5"
+    else
+        IDF_DIR="$HOME/esp/esp-idf"
+    fi
+    
+    # Clone or update ESP-IDF
+    if [ ! -d "$IDF_DIR" ]; then
         mkdir -p "$HOME/esp"
         cd "$HOME/esp"
-        git clone --recursive https://github.com/espressif/esp-idf.git
-        cd esp-idf
-        git checkout v4.4.5  # Use stable version
+        git clone --recursive https://github.com/espressif/esp-idf.git "$(basename "$IDF_DIR")"
+        cd "$IDF_DIR"
+        git checkout "$IDF_VERSION"
         ./install.sh esp32
-        echo 'source $HOME/esp/esp-idf/export.sh' >> ~/.bashrc
-        source ~/.bashrc
+        echo "source $IDF_DIR/export.sh" >> ~/.bashrc
         cd - > /dev/null
     else
-        print_status "ESP-IDF already installed, updating..."
-        cd "$HOME/esp/esp-idf"
-        git pull
+        print_status "ESP-IDF already installed, updating to $IDF_VERSION..."
+        cd "$IDF_DIR"
+        git fetch
+        git checkout "$IDF_VERSION"
+        git submodule update --init --recursive
         ./install.sh esp32
         cd - > /dev/null
     fi
     
     # Source ESP-IDF environment
-    source "$HOME/esp/esp-idf/export.sh"
-    print_success "ESP-IDF installed and configured"
+    source "$IDF_DIR/export.sh"
+    print_success "ESP-IDF $IDF_VERSION installed and configured"
 }
 
 # Function to run setup
@@ -137,6 +159,7 @@ run_setup() {
 # Function to show help
 show_help() {
     echo "RaspRover IDF Quick Setup Script"
+    echo "Supports both ESP-IDF v4.4 and v5.0+"
     echo ""
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -144,6 +167,15 @@ show_help() {
     echo "  --help, -h         Show this help message"
     echo "  --idf-only         Install only ESP-IDF"
     echo "  --deps-only        Install only dependencies"
+    echo "  --idf-version VER  Specify ESP-IDF version (e.g., v4.4.5, v5.0)"
+    echo ""
+    echo "Environment Variables:"
+    echo "  IDF_VERSION        ESP-IDF version to install (default: v4.4.5)"
+    echo ""
+    echo "Examples:"
+    echo "  $0                                    # Install with default v4.4.5"
+    echo "  IDF_VERSION=v5.0 $0                  # Install with ESP-IDF v5.0"
+    echo "  $0 --idf-version v5.1                # Install with ESP-IDF v5.1"
     echo ""
     echo "This script will:"
     echo "1. Check/install ESP-IDF if needed"
@@ -162,6 +194,15 @@ case "${1:-}" in
         ;;
     "--deps-only")
         ./install_dependencies.sh --all
+        ;;
+    "--idf-version")
+        if [ -z "${2:-}" ]; then
+            print_error "ESP-IDF version not specified"
+            show_help
+            exit 1
+        fi
+        IDF_VERSION="$2"
+        check_idf_installation
         ;;
     "")
         run_setup

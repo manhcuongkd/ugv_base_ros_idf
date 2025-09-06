@@ -239,9 +239,20 @@ static void uart_task(void *pvParameters)
             data[len] = '\0';
             ESP_LOGI(TAG, "Received UART data (%d bytes): %s", len, data);
             
-            // For now, just log the received UART data
-            // TODO: Implement proper JSON command parsing and processing
-            ESP_LOGI(TAG, "UART command received: %s", data);
+            // Parse JSON command
+            json_command_t cmd;
+            esp_err_t result = json_parser_parse_command(data, &cmd);
+            if (result == ESP_OK) {
+                ESP_LOGI(TAG, "Successfully parsed command type: %d", cmd.type);
+                
+                // Process the command
+                result = json_parser_process_command(&cmd);
+                if (result != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to process command: %s", esp_err_to_name(result));
+                }
+            } else {
+                ESP_LOGE(TAG, "Failed to parse JSON command: %s", esp_err_to_name(result));
+            }
         }
         
         vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz UART processing rate
