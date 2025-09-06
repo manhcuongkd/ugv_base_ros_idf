@@ -270,7 +270,7 @@ source ~/.bashrc
 #### Install Dependencies
 ```bash
 # Navigate to project directory
-cd RaspRover
+cd ugv_base_ros_idf
 
 # Install all dependencies
 ./install_dependencies.sh

@@ -65,11 +65,8 @@ check_git() {
 install_idf_dependencies() {
     print_status "Installing dependencies using ESP-IDF Component Manager..."
     
-    # Update component registry
+    # Install dependencies using ESP-IDF Component Manager
     idf.py reconfigure
-    
-    # Install dependencies
-    idf.py reconfigure --recursive
     
     print_success "ESP-IDF dependencies installed"
 }
@@ -101,10 +98,11 @@ install_custom_components() {
         fi
     }
     
-    # Install custom components
-    install_component "SCServo" "https://github.com/yourusername/SCServo.git" "master"
+    # Install custom components (if needed)
+    # Note: SCServo protocol is implemented directly in servo_controller.cpp
+    # No external SCServo component required
     
-    print_success "Custom components installed"
+    print_success "Custom components check completed"
 }
 
 # Function to install system dependencies (Ubuntu/Debian)
@@ -143,7 +141,7 @@ install_python_dependencies() {
     print_status "Installing Python dependencies..."
     
     # Install required Python packages
-    pip3 install --user \
+    pip3 install \
         esptool \
         adafruit-circuitpython-busdevice \
         adafruit-circuitpython-register \
