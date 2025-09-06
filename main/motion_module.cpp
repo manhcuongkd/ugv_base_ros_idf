@@ -165,6 +165,10 @@ esp_err_t motion_module_apply_motor_control(void)
     int left_pwm = (int)left_pid_controller.output;
     int right_pwm = (int)right_pid_controller.output;
     
+    // Apply speed rates to PWM values
+    left_pwm = (int)(left_pwm * left_speed_rate);
+    right_pwm = (int)(right_pwm * right_speed_rate);
+    
     // Limit PWM values
     left_pwm = (left_pwm > PWM_MAX_DUTY) ? PWM_MAX_DUTY : (left_pwm < -PWM_MAX_DUTY) ? -PWM_MAX_DUTY : left_pwm;
     right_pwm = (right_pwm > PWM_MAX_DUTY) ? PWM_MAX_DUTY : (right_pwm < -PWM_MAX_DUTY) ? -PWM_MAX_DUTY : right_pwm;

@@ -575,3 +575,4 @@ static esp_err_t json_parser_create_feedback_json(const json_feedback_t *feedbac
     
     return ESP_OK;
 }
+

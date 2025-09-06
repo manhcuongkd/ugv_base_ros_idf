@@ -32,6 +32,7 @@ static QueueHandle_t json_cmd_queue;
 static TaskHandle_t main_task_handle;
 static TaskHandle_t imu_task_handle;
 static TaskHandle_t motion_task_handle;
+static TaskHandle_t uart_task_handle;
 
 // Configuration
 ugv_config_t ugv_config = {
@@ -49,6 +50,7 @@ ugv_config_t ugv_config = {
 static void main_task(void *pvParameters);
 static void imu_task(void *pvParameters);
 static void motion_task(void *pvParameters);
+static void uart_task(void *pvParameters);
 
 extern "C" void app_main(void)
 {
@@ -76,6 +78,7 @@ extern "C" void app_main(void)
     xTaskCreatePinnedToCore(main_task, "main_task", 8192, NULL, 5, &main_task_handle, 0);
     xTaskCreatePinnedToCore(imu_task, "imu_task", 4096, NULL, 4, &imu_task_handle, 1);
     xTaskCreatePinnedToCore(motion_task, "motion_task", 4096, NULL, 3, &motion_task_handle, 0);
+    xTaskCreatePinnedToCore(uart_task, "uart_task", 4096, NULL, 4, &uart_task_handle, 0);
     
     ESP_LOGI(TAG, "RaspRover application started successfully");
 }
@@ -197,4 +200,52 @@ static void motion_task(void *pvParameters)
         
         vTaskDelay(pdMS_TO_TICKS(20)); // 50Hz motion control rate
     }
+}
+
+// UART task
+static void uart_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "UART task started");
+    
+    // UART configuration
+    const uart_config_t uart_config = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .rx_flow_ctrl_thresh = 0,
+        .source_clk = UART_SCLK_APB,
+    };
+    
+    // Install UART driver
+    ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 1024 * 2, 1024 * 2, 20, NULL, 0));
+    ESP_ERROR_CHECK(uart_param_config(UART_NUM_0, &uart_config));
+    ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0, GPIO_NUM_1, GPIO_NUM_3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    
+    while (!system_manager_is_initialized()) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    
+    ESP_LOGI(TAG, "UART initialized, starting command processing...");
+    
+    char* data = (char*) malloc(1024);
+    
+    // UART command processing loop
+    while (1) {
+        // Read data from UART
+        int len = uart_read_bytes(UART_NUM_0, data, 1023, pdMS_TO_TICKS(100));
+        if (len > 0) {
+            data[len] = '\0';
+            ESP_LOGI(TAG, "Received UART data (%d bytes): %s", len, data);
+            
+            // For now, just log the received UART data
+            // TODO: Implement proper JSON command parsing and processing
+            ESP_LOGI(TAG, "UART command received: %s", data);
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz UART processing rate
+    }
+    
+    free(data);
 }
