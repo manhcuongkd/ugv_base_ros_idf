@@ -1,10 +1,10 @@
-# RaspRover IDF - ESP32-Based Robot Control System
+# ugv_base_ros_idf IDF - ESP32-Based Robot Control System
 
 A comprehensive ESP-IDF implementation of the Waveshare UGV base ROS robot control system, converted from the original Arduino-based project with full modular architecture.
 
 ## 🚀 Overview
 
-RaspRover IDF is a complete ESP32-based robot control system featuring:
+ugv_base_ros_idf IDF is a complete ESP32-based robot control system featuring:
 
 - **🎮 Motion Control**: PID-based motor control with encoder feedback and speed rate limiting
 - **📡 IMU Integration**: ICM20948 9-DOF sensor with DMP support and quaternion calculations
@@ -63,8 +63,6 @@ ugv_base_ros_idf/
 ├── build.sh                          # Build automation script
 ├── setup.sh                          # Automated setup script
 ├── install_dependencies.sh           # Dependency installation script
-├── FEATURE_IMPLEMENTATION_STATUS.md  # Implementation status tracking
-├── PROJECT_STRUCTURE.md              # Detailed project structure
 └── README.md                         # This file
 ```
 
@@ -198,7 +196,7 @@ The project includes automated setup scripts that support both ESP-IDF v4.4.5 an
 #### For ESP-IDF v4.4.5 (Default)
 ```bash
 # Navigate to project directory
-cd RaspRover
+cd ugv_base_ros_idf
 
 # Run the automatic setup script (installs v4.4.5 by default)
 ./setup.sh
@@ -212,7 +210,7 @@ cd RaspRover
 #### For ESP-IDF v5.0+
 ```bash
 # Navigate to project directory
-cd RaspRover
+cd ugv_base_ros_idf
 
 # Set ESP-IDF version and run setup
 export IDF_VERSION="v5.0"
@@ -296,7 +294,7 @@ source $HOME/esp/esp-idf-v5/export.sh
 ./switch_idf.sh --v4  # or --v5
 
 # Navigate to project directory
-cd RaspRover
+cd ugv_base_ros_idf
 
 # Configure the project
 idf.py menuconfig
@@ -658,10 +656,6 @@ Enable debug output by setting log levels in `menuconfig`:
 - **Stack Sizes**: Monitor stack usage and adjust if needed
 - **Memory Usage**: Use heap monitoring tools to track memory usage
 - **CPU Usage**: Monitor CPU usage across cores
-
-## 📊 Implementation Status
-
-See [FEATURE_IMPLEMENTATION_STATUS.md](FEATURE_IMPLEMENTATION_STATUS.md) for detailed implementation status.
 
 ### Completed Features ✅
 - ✅ Core motion control with PID
