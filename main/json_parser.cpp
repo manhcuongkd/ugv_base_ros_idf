@@ -74,8 +74,8 @@ esp_err_t json_parser_process_command(json_command_t *cmd) {
 
 static esp_err_t json_parser_parse_command_data(const cJSON *json, json_command_t *cmd) {
     switch (cmd->type) {
+        // Emergency and system control commands (no additional data)
         case CMD_EMERGENCY_STOP: // {"T":0}
-            // No additional data needed
             break;
 
         case CMD_SPEED_CTRL: // {"T":1,"L":0.5,"R":0.5}
@@ -584,49 +584,19 @@ static esp_err_t json_parser_parse_command_data(const cJSON *json, json_command_
             }
             break;
 
-        // Add missing command types based on Arduino implementation
-        case CMD_OLED_DEFAULT: // {"T":-3}
-            // No additional data needed
-            break;
-
-        case CMD_GET_IMU_DATA: // {"T":126}
-            // No additional data needed
-            break;
-
-        case CMD_CALI_IMU_STEP: // {"T":127}
-            // No additional data needed
-            break;
-
-        case CMD_GET_IMU_OFFSET: // {"T":128}
-            // No additional data needed
-            break;
-
-        case CMD_BASE_FEEDBACK: // {"T":130}
-            // No additional data needed
-            break;
-
-        case CMD_GIMBAL_CTRL_STOP: // {"T":135}
-            // No additional data needed
-            break;
-
-        case CMD_GET_SPD_RATE: // {"T":139}
-            // No additional data needed
-            break;
-
-        case CMD_SAVE_SPD_RATE: // {"T":140}
-            // No additional data needed
-            break;
-
-        case CMD_MOVE_INIT: // {"T":100}
-            // No additional data needed
-            break;
-
-        case CMD_SERVO_RAD_FEEDBACK: // {"T":105}
-            // No additional data needed
-            break;
-
-        case CMD_RESET_PID: // {"T":109}
-            // No additional data needed
+        // IMU, motion, servo, and file system commands (no additional data)
+        case CMD_OLED_DEFAULT:        // {"T":-3}
+        case CMD_GET_IMU_DATA:        // {"T":126}
+        case CMD_CALI_IMU_STEP:       // {"T":127}
+        case CMD_GET_IMU_OFFSET:      // {"T":128}
+        case CMD_BASE_FEEDBACK:       // {"T":130}
+        case CMD_GIMBAL_CTRL_STOP:    // {"T":135}
+        case CMD_GET_SPD_RATE:        // {"T":139}
+        case CMD_SAVE_SPD_RATE:       // {"T":140}
+        case CMD_MOVE_INIT:           // {"T":100}
+        case CMD_SERVO_RAD_FEEDBACK:  // {"T":105}
+        case CMD_RESET_PID:           // {"T":109}
+        case CMD_SCAN_FILES:          // {"T":200}
             break;
 
         case CMD_SINGLE_AXIS_CTRL: // {"T":103,"axis":2,"pos":100,"spd":1}
@@ -651,10 +621,6 @@ static esp_err_t json_parser_parse_command_data(const cJSON *json, json_command_
                 if (z && cJSON_IsNumber(z)) cmd->data.xyzt_direct_ctrl.z = z->valuedouble;
                 if (t && cJSON_IsNumber(t)) cmd->data.xyzt_direct_ctrl.t = t->valuedouble;
             }
-            break;
-
-        case CMD_SCAN_FILES: // {"T":200}
-            // No additional data needed
             break;
 
         case CMD_CREATE_FILE: // {"T":201,"name":"file.txt","content":"inputContentHere."}
@@ -928,44 +894,18 @@ static esp_err_t json_parser_parse_command_data(const cJSON *json, json_command_
             }
             break;
 
-        case CMD_GET_MAC_ADDRESS: // {"T":302}
-            // No additional data needed
-            break;
-
-        case CMD_WIFI_INFO: // {"T":405}
-            // No additional data needed
-            break;
-
+        // Commands with no additional data needed
+        case CMD_GET_MAC_ADDRESS:        // {"T":302}
+        case CMD_WIFI_INFO:              // {"T":405}
         case CMD_WIFI_CONFIG_CREATE_BY_STATUS: // {"T":406}
-            // No additional data needed
-            break;
-
-        case CMD_WIFI_STOP: // {"T":408}
-            // No additional data needed
-            break;
-
-        case CMD_REBOOT: // {"T":600}
-            // No additional data needed
-            break;
-
-        case CMD_FREE_FLASH_SPACE: // {"T":601}
-            // No additional data needed
-            break;
-
-        case CMD_BOOT_MISSION_INFO: // {"T":602}
-            // No additional data needed
-            break;
-
-        case CMD_RESET_BOOT_MISSION: // {"T":603}
-            // No additional data needed
-            break;
-
-        case CMD_NVS_CLEAR: // {"T":604}
-            // No additional data needed
-            break;
-
-        case CMD_RESET_EMERGENCY: // {"T":999}
-            // No additional data needed
+        case CMD_WIFI_STOP:              // {"T":408}
+        case CMD_REBOOT:                 // {"T":600}
+        case CMD_FREE_FLASH_SPACE:       // {"T":601}
+        case CMD_BOOT_MISSION_INFO:      // {"T":602}
+        case CMD_RESET_BOOT_MISSION:     // {"T":603}
+        case CMD_NVS_CLEAR:              // {"T":604}
+        case CMD_RESET_EMERGENCY:        // {"T":999}
+            // No additional data needed for these commands
             break;
 
         default:

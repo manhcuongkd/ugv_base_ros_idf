@@ -299,7 +299,8 @@ void mission_playback_task(void *pvParameters) {
         ESP_LOGI(TAG, "Starting mission repeat %d/%d", repeat_count + 1, current_repeat_times);
         
         // Read and execute all steps in the mission
-        int step_num = 1;
+        // Note: Line 1 is mission intro, commands start from line 2
+        int step_num = 2;
         char step_content[256];
         
         while (!mission_abort_requested) {

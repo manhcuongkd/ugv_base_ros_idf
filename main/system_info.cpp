@@ -11,7 +11,7 @@
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 #include <esp_flash.h>
 #else
-#include <spi_flash/esp_flash.h>
+#include <esp_spi_flash.h>
 #endif
 
 static const char *TAG = "System_Info";

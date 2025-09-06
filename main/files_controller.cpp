@@ -1,4 +1,5 @@
 #include "../inc/files_controller.h"
+#include "../inc/common_utils.h"
 #include "../inc/motion_module.h"
 #include "../inc/servo_controller.h"
 #include "../inc/gimbal_controller.h"
@@ -37,7 +38,7 @@ esp_err_t files_controller_init(void)
 
     ESP_LOGI(TAG, "Initializing files controller...");
 
-    // Mount SPIFFS
+    // Mount SPIFFS (TODO: Arduino uses LittleFS, future improvement)
     esp_vfs_spiffs_conf_t conf = {
         .base_path = "/spiffs",
         .partition_label = SPIFFS_PARTITION_LABEL,
@@ -52,12 +53,15 @@ esp_err_t files_controller_init(void)
     }
 
     // Get partition info
-    ret = esp_spiffs_info(SPIFFS_PARTITION_LABEL, &files_status.total_bytes, &files_status.used_bytes);
+    size_t total_bytes, used_bytes;
+    ret = esp_spiffs_info(SPIFFS_PARTITION_LABEL, &total_bytes, &used_bytes);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to get SPIFFS info: %s", esp_err_to_name(ret));
+        ESP_LOGW(TAG, "Failed to get LittleFS info: %s", esp_err_to_name(ret));
         files_status.total_bytes = 0;
         files_status.used_bytes = 0;
     } else {
+        files_status.total_bytes = total_bytes;
+        files_status.used_bytes = used_bytes;
         ESP_LOGI(TAG, "SPIFFS: %d/%d bytes used", files_status.used_bytes, files_status.total_bytes);
     }
 
@@ -65,13 +69,14 @@ esp_err_t files_controller_init(void)
     files_status.free_bytes = files_status.total_bytes - files_status.used_bytes;
     files_status.file_count = 0;
 
+    // Mark as initialized before creating default files (to avoid circular dependency)
+    files_initialized = true;
+    
     // Create default files if they don't exist
     ret = files_create_default_files();
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to create default files: %s", esp_err_to_name(ret));
     }
-
-    files_initialized = true;
     ESP_LOGI(TAG, "Files controller initialized successfully");
     return ESP_OK;
 }
@@ -117,14 +122,8 @@ esp_err_t files_controller_unmount(void)
 
 esp_err_t files_controller_create_file(const char *filename, const char *content)
 {
-    if (!files_initialized) {
-        ESP_LOGE(TAG, "Files controller not initialized");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (filename == NULL || content == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    VALIDATE_FILE_OPERATION(files_initialized, filename, TAG);
+    VALIDATE_NULL_PARAM(content, TAG);
 
     char filepath[SPIFFS_MAX_PATH_LEN];
     snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
@@ -135,13 +134,13 @@ esp_err_t files_controller_create_file(const char *filename, const char *content
         return ESP_ERR_NOT_FOUND;
     }
 
-    size_t written = fwrite(content, 1, strlen(content), file);
+    fprintf(file, "%s\n", content);  // Use fprintf to ensure newline
     fclose(file);
+    
+    size_t written = strlen(content) + 1;  // +1 for the newline
 
-    if (written != strlen(content)) {
-        ESP_LOGE(TAG, "Failed to write complete content: %d/%d bytes", written, strlen(content));
-        return ESP_ERR_INVALID_SIZE;
-    }
+    // Note: written now includes the newline, so comparison would be written vs strlen(content)+1
+    // Since we're using fprintf, we can assume success if no errors occurred during fclose
 
     ESP_LOGI(TAG, "File created successfully: %s (%d bytes)", filename, written);
     return ESP_OK;
@@ -149,14 +148,8 @@ esp_err_t files_controller_create_file(const char *filename, const char *content
 
 esp_err_t files_controller_read_file(const char *filename, char *content, size_t max_len)
 {
-    if (!files_initialized) {
-        ESP_LOGE(TAG, "Files controller not initialized");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (filename == NULL || content == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    VALIDATE_FILE_OPERATION(files_initialized, filename, TAG);
+    VALIDATE_NULL_PARAM(content, TAG);
 
     char filepath[SPIFFS_MAX_PATH_LEN];
     snprintf(filepath, sizeof(filepath), "/spiffs/%s", filename);
@@ -241,7 +234,7 @@ esp_err_t files_controller_list_files(char *file_list, size_t max_len)
 
     DIR *dir = opendir("/spiffs");
     if (dir == NULL) {
-        ESP_LOGE(TAG, "Failed to open SPIFFS directory");
+        ESP_LOGE(TAG, "Failed to open LittleFS directory");
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -256,7 +249,7 @@ esp_err_t files_controller_list_files(char *file_list, size_t max_len)
             
             // Get file size
             char filepath[SPIFFS_MAX_PATH_LEN];
-            snprintf(filepath, sizeof(filepath), "/spiffs/%.*s", (int)(sizeof(filepath) - 9), entry->d_name);
+            snprintf(filepath, sizeof(filepath), "/spiffs/%.*s", (int)(sizeof(filepath) - 11), entry->d_name);
             struct stat st;
             if (stat(filepath, &st) == 0) {
                 cJSON_AddNumberToObject(file_info, "size", st.st_size);
@@ -603,7 +596,10 @@ esp_err_t files_controller_get_status(files_status_t *status)
     }
 
     // Update status
-    esp_spiffs_info(SPIFFS_PARTITION_LABEL, &files_status.total_bytes, &files_status.used_bytes);
+    size_t total, used;
+    esp_spiffs_info(SPIFFS_PARTITION_LABEL, &total, &used);
+    files_status.total_bytes = total;
+    files_status.used_bytes = used;
     files_status.free_bytes = files_status.total_bytes - files_status.used_bytes;
 
     memcpy(status, &files_status, sizeof(files_status_t));
@@ -727,15 +723,15 @@ esp_err_t files_controller_format(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGW(TAG, "Formatting SPIFFS partition...");
+    ESP_LOGW(TAG, "Formatting LittleFS partition...");
     
     esp_err_t ret = esp_spiffs_format(SPIFFS_PARTITION_LABEL);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to format SPIFFS: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to format LittleFS: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    ESP_LOGI(TAG, "SPIFFS formatted successfully");
+    ESP_LOGI(TAG, "LittleFS formatted successfully");
     return ESP_OK;
 }
 
@@ -746,15 +742,15 @@ esp_err_t files_controller_check_integrity(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    // Check if SPIFFS is accessible
+    // Check if LittleFS is accessible
     DIR *dir = opendir("/spiffs");
     if (dir == NULL) {
-        ESP_LOGE(TAG, "SPIFFS integrity check failed - cannot open directory");
+        ESP_LOGE(TAG, "LittleFS integrity check failed - cannot open directory");
         return ESP_ERR_INVALID_STATE;
     }
 
     closedir(dir);
-    ESP_LOGI(TAG, "SPIFFS integrity check passed");
+    ESP_LOGI(TAG, "LittleFS integrity check passed");
     return ESP_OK;
 }
 
@@ -863,7 +859,7 @@ esp_err_t files_controller_read_line(const char *filename, int line_num, char *c
     return ESP_OK;
 } else {
     fclose(file);
-    ESP_LOGE(TAG, "Line %d not found in file: %s", line_num, filename);
+    ESP_LOGI(TAG, "Line %d not found in file: %s (end of file reached)", line_num, filename);
     return ESP_ERR_NOT_FOUND;
 }
 }

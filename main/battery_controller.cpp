@@ -1,4 +1,5 @@
 #include "../inc/battery_controller.h"
+#include "../inc/ugv_config.h"
 #include <esp_log.h>
 #include <driver/i2c.h>
 #include <freertos/FreeRTOS.h>
@@ -6,9 +7,6 @@
 #include <math.h>
 
 static const char *TAG = "BatteryController";
-
-// INA219 I2C address
-#define INA219_I2C_ADDR 0x40
 
 // INA219 registers
 #define INA219_REG_CONFIG      0x00

@@ -23,9 +23,9 @@ extern "C" {
 #define BENCA GPIO_NUM_27     // Right encoder A
 #define BENCB GPIO_NUM_16     // Right encoder B
 
-// I2C pins
-#define S_SDA GPIO_NUM_21
-#define S_SCL GPIO_NUM_22
+// I2C pins (matching Arduino ugv_config.h: S_SDA 32, S_SCL 33)
+#define S_SDA GPIO_NUM_32     // I2C data line 
+#define S_SCL GPIO_NUM_33     // I2C clock line
 
 // UART pins for servo control
 #define SERVO_RXD GPIO_NUM_18
@@ -38,8 +38,10 @@ extern "C" {
 #define OLED_SDA S_SDA
 #define OLED_SCL S_SCL
 
-// Battery monitoring pins
+// Battery monitoring pins and I2C address
 #define BATTERY_VOLTAGE_PIN GPIO_NUM_4
+#define INA219_I2C_ADDR     0x42    // INA219 I2C address (matches Arduino)
+#define OLED_I2C_ADDR       0x3C    // SSD1306 OLED I2C address
 
 // Servo IDs for RoArm-M2
 #define BASE_SERVO_ID          11
@@ -92,8 +94,12 @@ extern "C" {
 #define PID_THRESHOLD_PWM      5       // Minimum PWM threshold
 #define PID_WINDUP_LIMITS      100.0f  // Integral windup limits
 
-// IMU configuration
-#define IMU_SAMPLE_RATE_HZ     100
+// IMU configuration (ICM20948)
+#define ICM20948_I2C_ADDR       0x68           // Default I2C address (AD0_VAL = 0)
+#define ICM20948_I2C_ADDR_ALT   0x69           // Alternative address (AD0_VAL = 1)
+#define ICM20948_WHO_AM_I       0x00           // WHO_AM_I register
+#define ICM20948_WHO_AM_I_VAL   0xEA           // Expected WHO_AM_I response
+#define IMU_SAMPLE_RATE_HZ      100
 #define IMU_CALIBRATION_SAMPLES 1000
 
 // Communication configuration

@@ -41,6 +41,14 @@ esp_err_t esp_now_controller_init(void)
 
     ESP_LOGI(TAG, "Initializing ESP-NOW controller...");
 
+    // Initialize WiFi (required for ESP-NOW)
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    esp_err_t ret = esp_wifi_init(&cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize WiFi: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
     // Initialize WiFi in AP mode for ESP-NOW
     wifi_config_t ap_config = {0};
     strcpy((char*)ap_config.ap.ssid, "RaspRover_ESP_NOW");
@@ -50,7 +58,7 @@ esp_err_t esp_now_controller_init(void)
     ap_config.ap.max_connection = 4;
     ap_config.ap.beacon_interval = 100;
 
-    esp_err_t ret = esp_wifi_set_mode(WIFI_MODE_AP);
+    ret = esp_wifi_set_mode(WIFI_MODE_AP);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set WiFi mode: %s", esp_err_to_name(ret));
         return ret;
@@ -101,6 +109,9 @@ esp_err_t esp_now_controller_init(void)
     esp_now_control.follower_count = 0;
     esp_now_control.flow_control_interval_ms = ESP_NOW_FLOW_CONTROL_INTERVAL;
 
+    // Mark as initialized before creating tasks (prevents timing errors)
+    esp_now_initialized = true;
+
     // Create ESP-NOW task
     BaseType_t task_created = xTaskCreate(
         esp_now_controller_task,
@@ -134,7 +145,6 @@ esp_err_t esp_now_controller_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    esp_now_initialized = true;
     ESP_LOGI(TAG, "ESP-NOW controller initialized successfully");
     return ESP_OK;
 }
@@ -464,7 +474,7 @@ esp_err_t esp_now_controller_get_status(esp_now_control_t *status)
 }
 
 // Private functions
-void esp_now_controller_on_data_sent(const esp_now_send_cb_t *cb, esp_now_send_status_t status)
+void esp_now_controller_on_data_sent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
     if (status == ESP_NOW_SEND_SUCCESS) {
         ESP_LOGI(TAG, "Data sent successfully");
@@ -473,7 +483,7 @@ void esp_now_controller_on_data_sent(const esp_now_send_cb_t *cb, esp_now_send_s
     }
 }
 
-void esp_now_controller_on_data_recv(const esp_now_recv_cb_t *cb, const uint8_t *data, int data_len)
+void esp_now_controller_on_data_recv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
 {
     if (data == NULL || data_len != sizeof(esp_now_message_t)) {
         ESP_LOGW(TAG, "Invalid data received: %d bytes", data_len);

@@ -288,7 +288,7 @@ esp_err_t imu_controller_get_data_log(void);
 #define DEFAULT_IMU_LOW_POWER       false
 
 // IMU I2C address
-#define ICM20948_I2C_ADDR          0x68
+// ICM20948_I2C_ADDR defined in ugv_config.h
 
 // Register addresses (simplified)
 #define ICM20948_WHO_AM_I          0x00

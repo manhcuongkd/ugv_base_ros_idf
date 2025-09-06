@@ -29,6 +29,14 @@
 
 static const char *TAG = "Main";
 
+// Helper function to wait for system initialization (eliminates redundancy)
+static void wait_for_system_initialization(void)
+{
+    while (!system_manager_is_initialized()) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
 // Global variables
 static QueueHandle_t json_cmd_queue;
 static TaskHandle_t main_task_handle;
@@ -91,9 +99,7 @@ static void main_task(void *pvParameters)
     ESP_LOGI(TAG, "Main task started");
     
     // Wait for system initialization
-    while (!system_manager_is_initialized()) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
+    wait_for_system_initialization();
     
     // Display startup message
     oled_controller_display_text(0, "RaspRover IDF");
@@ -103,6 +109,9 @@ static void main_task(void *pvParameters)
     oled_controller_update();
     
     vTaskDelay(pdMS_TO_TICKS(1200));
+    
+    // Switch back to default mode for periodic updates
+    oled_controller_reset_to_default();
     
     // Main application loop
     while (1) {
@@ -127,8 +136,8 @@ static void main_task(void *pvParameters)
         // Heartbeat control
         heart_beat_ctrl();
         
-        // Update OLED display
-        oled_controller_update_system_info();
+        // Update OLED display (Arduino-style periodic update)
+        oled_controller_info_update();
         
         vTaskDelay(pdMS_TO_TICKS(50)); // 20Hz update rate
     }
@@ -139,9 +148,7 @@ static void imu_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "IMU task started");
     
-    while (!system_manager_is_initialized()) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
+    wait_for_system_initialization();
     
     // IMU calibration
     ESP_LOGI(TAG, "Starting IMU calibration...");
@@ -173,9 +180,7 @@ static void motion_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "Motion task started");
     
-    while (!system_manager_is_initialized()) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
+    wait_for_system_initialization();
     
     // Initialize encoders
     motion_module_init_encoders();
@@ -205,25 +210,8 @@ static void uart_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "UART task started");
     
-    // UART configuration
-    const uart_config_t uart_config = {
-        .baud_rate = 115200,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .rx_flow_ctrl_thresh = 0,
-        .source_clk = UART_SCLK_APB,
-    };
-    
-    // Install UART driver
-    ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 1024 * 2, 1024 * 2, 20, NULL, 0));
-    ESP_ERROR_CHECK(uart_param_config(UART_NUM_0, &uart_config));
-    ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0, GPIO_NUM_1, GPIO_NUM_3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    
-    while (!system_manager_is_initialized()) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
+    // Wait for system initialization (UART already configured by system manager)
+    wait_for_system_initialization();
     
     ESP_LOGI(TAG, "UART initialized, starting command processing...");
     

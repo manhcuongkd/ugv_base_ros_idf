@@ -1,4 +1,4 @@
-# ugv_base_ros_idf IDF - ESP32-Based Robot Control System
+# RaspRover IDF - ESP32-Based Robot Control System
 
 A comprehensive ESP-IDF implementation of the Waveshare UGV base ROS robot control system, converted from the original Arduino-based project with full modular architecture.
 
@@ -137,26 +137,26 @@ ugv_base_ros_idf/
 
 ### Motor Control Pins
 ```cpp
-#define AIN1 GPIO_NUM_32      // Left motor direction 1
-#define AIN2 GPIO_NUM_33      // Left motor direction 2
+#define AIN1 GPIO_NUM_21      // Left motor direction 1
+#define AIN2 GPIO_NUM_17      // Left motor direction 2
 #define PWMA GPIO_NUM_25      // Left motor PWM
-#define BIN1 GPIO_NUM_26      // Right motor direction 1
-#define BIN2 GPIO_NUM_27      // Right motor direction 2
-#define PWMB GPIO_NUM_14      // Right motor PWM
+#define BIN1 GPIO_NUM_22      // Right motor direction 1
+#define BIN2 GPIO_NUM_23      // Right motor direction 2
+#define PWMB GPIO_NUM_26      // Right motor PWM
 ```
 
 ### Encoder Pins
 ```cpp
-#define LEFT_ENCODER_A GPIO_NUM_34
-#define LEFT_ENCODER_B GPIO_NUM_35
-#define RIGHT_ENCODER_A GPIO_NUM_36
-#define RIGHT_ENCODER_B GPIO_NUM_39
+#define AENCA GPIO_NUM_35     // Left encoder A
+#define AENCB GPIO_NUM_34     // Left encoder B
+#define BENCA GPIO_NUM_27     // Right encoder A
+#define BENCB GPIO_NUM_16     // Right encoder B
 ```
 
 ### I2C Pins
 ```cpp
-#define S_SDA GPIO_NUM_21     // I2C data line
-#define S_SCL GPIO_NUM_22     // I2C clock line
+#define S_SDA GPIO_NUM_32     // I2C data line
+#define S_SCL GPIO_NUM_33     // I2C clock line
 ```
 
 ### Servo Control Pins

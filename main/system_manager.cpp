@@ -23,6 +23,9 @@
 #include "../inc/mission_system.h"
 #include "../inc/ugv_advanced.h"
 #include "../inc/json_parser.h"
+#include "../inc/uart_controller.h"
+#include "../inc/esp_now_controller.h"
+#include "../inc/files_controller.h"
 
 static const char *TAG = "System_Manager";
 
@@ -44,7 +47,7 @@ esp_err_t system_manager_init(void)
     // Initialize communication
     ESP_ERROR_CHECK(system_manager_init_communication());
     
-    // Initialize file system
+    // Initialize file system (SPIFFS - Arduino uses LittleFS but SPIFFS is compatible)
     esp_vfs_spiffs_conf_t conf = {
         .base_path = "/spiffs",
         .partition_label = NULL,
@@ -54,19 +57,32 @@ esp_err_t system_manager_init(void)
     
     esp_err_t ret = esp_vfs_spiffs_register(&conf);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount SPIFFS (%s)", esp_err_to_name(ret));
-        return ret;
+        ESP_LOGW(TAG, "Failed to mount SPIFFS (%s), continuing without file system", esp_err_to_name(ret));
+        // Continue without SPIFFS - file system is non-critical for basic operation  
+        // Note: Arduino uses LittleFS, future improvement would migrate to LittleFS
+    } else {
+        ESP_LOGI(TAG, "SPIFFS mounted successfully");
     }
     
-    // Create boot mission (matching Arduino implementation)
-    ESP_LOGI(TAG, "Creating boot mission...");
-    create_mission("boot", "these cmds run automatically at boot.");
+    // Initialize Files Controller (depends on SPIFFS)
+    esp_err_t files_result = files_controller_init();
+    if (files_result != ESP_OK) {
+        ESP_LOGW(TAG, "Files controller initialization failed (%s), continuing without file operations", esp_err_to_name(files_result));
+    }
     
-    // Save main type and module type to boot mission
-    save_main_type_module_type(1, 2); // RaspRover, Gimbal
-    
-    // Play boot mission once
-    mission_play("boot", 1);
+    // Create boot mission only if file system is available (matching Arduino implementation)
+    if (files_result == ESP_OK) {
+        ESP_LOGI(TAG, "Creating boot mission...");
+        create_mission("boot", "these cmds run automatically at boot.");
+        
+        // Save main type and module type to boot mission
+        save_main_type_module_type(1, 2); // RaspRover, Gimbal
+        
+        // Play boot mission once
+        mission_play("boot", 1);
+    } else {
+        ESP_LOGI(TAG, "Skipping boot mission creation - no file system available");
+    }
     
     system_initialized = true;
     ESP_LOGI(TAG, "System initialization completed");
@@ -95,14 +111,23 @@ esp_err_t system_manager_init_hardware(void)
     // Initialize motion module
     ESP_ERROR_CHECK(motion_module_init());
     
-    // Initialize IMU
-    ESP_ERROR_CHECK(imu_controller_init());
+    // Initialize IMU (non-critical - continue even if IMU is not connected)
+    esp_err_t imu_result = imu_controller_init();
+    if (imu_result != ESP_OK) {
+        ESP_LOGW(TAG, "IMU initialization failed (%s), continuing without IMU", esp_err_to_name(imu_result));
+    }
     
-    // Initialize OLED
-    ESP_ERROR_CHECK(oled_controller_init());
+    // Initialize OLED (non-critical - continue even if OLED is not connected)
+    esp_err_t oled_result = oled_controller_init();
+    if (oled_result != ESP_OK) {
+        ESP_LOGW(TAG, "OLED initialization failed (%s), continuing without OLED", esp_err_to_name(oled_result));
+    }
     
-    // Initialize battery controller
-    ESP_ERROR_CHECK(battery_controller_init());
+    // Initialize battery controller (non-critical - continue even if INA219 is not connected)
+    esp_err_t battery_result = battery_controller_init();
+    if (battery_result != ESP_OK) {
+        ESP_LOGW(TAG, "Battery controller initialization failed (%s), continuing without battery monitoring", esp_err_to_name(battery_result));
+    }
     
     // Initialize LED controller
     ESP_ERROR_CHECK(led_controller_init());
@@ -127,20 +152,18 @@ esp_err_t system_manager_init_communication(void)
     // Initialize HTTP server - temporarily disabled due to type conflicts
     // ESP_ERROR_CHECK(http_server_init());
     
-    // Initialize ESP-NOW
-    ESP_ERROR_CHECK(esp_now_init());
+    // Initialize ESP-NOW controller (non-critical)
+    esp_err_t esp_now_result = esp_now_controller_init();
+    if (esp_now_result != ESP_OK) {
+        ESP_LOGW(TAG, "ESP-NOW controller initialization failed (%s), continuing without ESP-NOW", esp_err_to_name(esp_now_result));
+    }
     
-    // Initialize UART
-    uart_config_t uart_config = {
-        .baud_rate = 115200,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_APB
-    };
-    ESP_ERROR_CHECK(uart_param_config(UART_NUM_0, &uart_config));
-    ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 1024, 1024, 0, NULL, 0));
+    // Initialize UART controller
+    esp_err_t uart_result = uart_controller_init();
+    if (uart_result != ESP_OK) {
+        ESP_LOGE(TAG, "UART controller initialization failed (%s)", esp_err_to_name(uart_result));
+        return uart_result;  // UART is critical for communication
+    }
     
     ESP_LOGI(TAG, "Communication initialization completed");
     return ESP_OK;

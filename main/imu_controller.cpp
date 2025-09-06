@@ -65,8 +65,8 @@ esp_err_t imu_controller_init(void)
     int retry_count = 0;
     const int max_retries = 10;
     
-    // Try both possible I2C addresses (0x68 and 0x69)
-    uint8_t addresses[] = {0x68, 0x69};
+    // Try both possible I2C addresses (matching Arduino AD0_VAL = 0 and 1)
+    uint8_t addresses[] = {ICM20948_I2C_ADDR, ICM20948_I2C_ADDR_ALT};
     
     while (!initialized && retry_count < max_retries) {
         for (int addr_idx = 0; addr_idx < 2 && !initialized; addr_idx++) {
@@ -75,7 +75,7 @@ esp_err_t imu_controller_init(void)
             ESP_LOGI(TAG, "IMU initialization attempt %d, address 0x%02X, WHO_AM_I: 0x%02X", 
                      retry_count + 1, imu_i2c_addr, who_am_i);
             
-            if (ret == ESP_OK && who_am_i == 0xEA) {
+            if (ret == ESP_OK && who_am_i == ICM20948_WHO_AM_I_VAL) {
                 initialized = true;
                 ESP_LOGI(TAG, "IMU found and responding correctly at address 0x%02X!", imu_i2c_addr);
                 break;
