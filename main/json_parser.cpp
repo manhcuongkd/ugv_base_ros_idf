@@ -67,12 +67,8 @@ esp_err_t json_parser_parse_command(const char *json_str, json_command_t *cmd) {
 }
 
 esp_err_t json_parser_process_command(json_command_t *cmd) {
-    if (!json_parser_initialized || cmd == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    ESP_LOGI(TAG, "Processing JSON command type: %d", cmd->type);
-    // Commands are now processed in uart_controller.cpp
+    // This function is redundant - commands are now processed in uart_controller.cpp
+    // Keep this as a stub for compatibility
     return ESP_OK;
 }
 
@@ -586,6 +582,390 @@ static esp_err_t json_parser_parse_command_data(const cJSON *json, json_command_
                 cJSON *cmd_item = cJSON_GetObjectItem(json, "cmd");
                 if (cmd_item && cJSON_IsNumber(cmd_item)) cmd->data.info_print.cmd = cmd_item->valueint;
             }
+            break;
+
+        // Add missing command types based on Arduino implementation
+        case CMD_OLED_DEFAULT: // {"T":-3}
+            // No additional data needed
+            break;
+
+        case CMD_GET_IMU_DATA: // {"T":126}
+            // No additional data needed
+            break;
+
+        case CMD_CALI_IMU_STEP: // {"T":127}
+            // No additional data needed
+            break;
+
+        case CMD_GET_IMU_OFFSET: // {"T":128}
+            // No additional data needed
+            break;
+
+        case CMD_BASE_FEEDBACK: // {"T":130}
+            // No additional data needed
+            break;
+
+        case CMD_GIMBAL_CTRL_STOP: // {"T":135}
+            // No additional data needed
+            break;
+
+        case CMD_GET_SPD_RATE: // {"T":139}
+            // No additional data needed
+            break;
+
+        case CMD_SAVE_SPD_RATE: // {"T":140}
+            // No additional data needed
+            break;
+
+        case CMD_MOVE_INIT: // {"T":100}
+            // No additional data needed
+            break;
+
+        case CMD_SERVO_RAD_FEEDBACK: // {"T":105}
+            // No additional data needed
+            break;
+
+        case CMD_RESET_PID: // {"T":109}
+            // No additional data needed
+            break;
+
+        case CMD_SINGLE_AXIS_CTRL: // {"T":103,"axis":2,"pos":100,"spd":1}
+            {
+                cJSON *axis = cJSON_GetObjectItem(json, "axis");
+                cJSON *pos = cJSON_GetObjectItem(json, "pos");
+                cJSON *spd = cJSON_GetObjectItem(json, "spd");
+                if (axis && cJSON_IsNumber(axis)) cmd->data.single_axis_ctrl.axis = axis->valueint;
+                if (pos && cJSON_IsNumber(pos)) cmd->data.single_axis_ctrl.pos = pos->valuedouble;
+                if (spd && cJSON_IsNumber(spd)) cmd->data.single_axis_ctrl.spd = spd->valuedouble;
+            }
+            break;
+
+        case CMD_XYZT_DIRECT_CTRL: // {"T":1041,"x":235,"y":0,"z":234,"t":3.14}
+            {
+                cJSON *x = cJSON_GetObjectItem(json, "x");
+                cJSON *y = cJSON_GetObjectItem(json, "y");
+                cJSON *z = cJSON_GetObjectItem(json, "z");
+                cJSON *t = cJSON_GetObjectItem(json, "t");
+                if (x && cJSON_IsNumber(x)) cmd->data.xyzt_direct_ctrl.x = x->valuedouble;
+                if (y && cJSON_IsNumber(y)) cmd->data.xyzt_direct_ctrl.y = y->valuedouble;
+                if (z && cJSON_IsNumber(z)) cmd->data.xyzt_direct_ctrl.z = z->valuedouble;
+                if (t && cJSON_IsNumber(t)) cmd->data.xyzt_direct_ctrl.t = t->valuedouble;
+            }
+            break;
+
+        case CMD_SCAN_FILES: // {"T":200}
+            // No additional data needed
+            break;
+
+        case CMD_CREATE_FILE: // {"T":201,"name":"file.txt","content":"inputContentHere."}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *content = cJSON_GetObjectItem(json, "content");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.create_file.name, name->valuestring, sizeof(cmd->data.create_file.name) - 1);
+                    cmd->data.create_file.name[sizeof(cmd->data.create_file.name) - 1] = '\0';
+                }
+                if (content && cJSON_IsString(content)) {
+                    strncpy(cmd->data.create_file.content, content->valuestring, sizeof(cmd->data.create_file.content) - 1);
+                    cmd->data.create_file.content[sizeof(cmd->data.create_file.content) - 1] = '\0';
+                }
+            }
+            break;
+
+        case CMD_DELETE_FILE: // {"T":203,"name":"file.txt"}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.delete_file.name, name->valuestring, sizeof(cmd->data.delete_file.name) - 1);
+                    cmd->data.delete_file.name[sizeof(cmd->data.delete_file.name) - 1] = '\0';
+                }
+            }
+            break;
+
+        case CMD_APPEND_LINE: // {"T":204,"name":"file.txt","content":"inputContentHere."}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *content = cJSON_GetObjectItem(json, "content");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.append_line.name, name->valuestring, sizeof(cmd->data.append_line.name) - 1);
+                    cmd->data.append_line.name[sizeof(cmd->data.append_line.name) - 1] = '\0';
+                }
+                if (content && cJSON_IsString(content)) {
+                    strncpy(cmd->data.append_line.content, content->valuestring, sizeof(cmd->data.append_line.content) - 1);
+                    cmd->data.append_line.content[sizeof(cmd->data.append_line.content) - 1] = '\0';
+                }
+            }
+            break;
+
+        case CMD_INSERT_LINE: // {"T":205,"name":"file.txt","lineNum":3,"content":"content"}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *lineNum = cJSON_GetObjectItem(json, "lineNum");
+                cJSON *content = cJSON_GetObjectItem(json, "content");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.insert_line.name, name->valuestring, sizeof(cmd->data.insert_line.name) - 1);
+                    cmd->data.insert_line.name[sizeof(cmd->data.insert_line.name) - 1] = '\0';
+                }
+                if (lineNum && cJSON_IsNumber(lineNum)) cmd->data.insert_line.lineNum = lineNum->valueint;
+                if (content && cJSON_IsString(content)) {
+                    strncpy(cmd->data.insert_line.content, content->valuestring, sizeof(cmd->data.insert_line.content) - 1);
+                    cmd->data.insert_line.content[sizeof(cmd->data.insert_line.content) - 1] = '\0';
+                }
+            }
+            break;
+
+        case CMD_REPLACE_LINE: // {"T":206,"name":"file.txt","lineNum":3,"content":"Content"}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *lineNum = cJSON_GetObjectItem(json, "lineNum");
+                cJSON *content = cJSON_GetObjectItem(json, "content");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.replace_line.name, name->valuestring, sizeof(cmd->data.replace_line.name) - 1);
+                    cmd->data.replace_line.name[sizeof(cmd->data.replace_line.name) - 1] = '\0';
+                }
+                if (lineNum && cJSON_IsNumber(lineNum)) cmd->data.replace_line.lineNum = lineNum->valueint;
+                if (content && cJSON_IsString(content)) {
+                    strncpy(cmd->data.replace_line.content, content->valuestring, sizeof(cmd->data.replace_line.content) - 1);
+                    cmd->data.replace_line.content[sizeof(cmd->data.replace_line.content) - 1] = '\0';
+                }
+            }
+            break;
+
+        case CMD_DELETE_LINE: // {"T":208,"name":"file.txt","lineNum":3}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *lineNum = cJSON_GetObjectItem(json, "lineNum");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.delete_line.name, name->valuestring, sizeof(cmd->data.delete_line.name) - 1);
+                    cmd->data.delete_line.name[sizeof(cmd->data.delete_line.name) - 1] = '\0';
+                }
+                if (lineNum && cJSON_IsNumber(lineNum)) cmd->data.delete_line.lineNum = lineNum->valueint;
+            }
+            break;
+
+        case CMD_CREATE_MISSION: // {"T":220,"name":"mission_a","intro":"test mission created in flash."}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *intro = cJSON_GetObjectItem(json, "intro");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.create_mission.name, name->valuestring, sizeof(cmd->data.create_mission.name) - 1);
+                    cmd->data.create_mission.name[sizeof(cmd->data.create_mission.name) - 1] = '\0';
+                }
+                if (intro && cJSON_IsString(intro)) {
+                    strncpy(cmd->data.create_mission.intro, intro->valuestring, sizeof(cmd->data.create_mission.intro) - 1);
+                    cmd->data.create_mission.intro[sizeof(cmd->data.create_mission.intro) - 1] = '\0';
+                }
+            }
+            break;
+
+        case CMD_MISSION_CONTENT: // {"T":221,"name":"mission_a"}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.mission_content.name, name->valuestring, sizeof(cmd->data.mission_content.name) - 1);
+                    cmd->data.mission_content.name[sizeof(cmd->data.mission_content.name) - 1] = '\0';
+                }
+            }
+            break;
+
+        case CMD_APPEND_STEP_JSON: // {"T":222,"name":"mission_a","step":"{\"T\":104,\"x\":235,\"y\":0,\"z\":234,\"t\":3.14,\"spd\":0.25}"}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *step = cJSON_GetObjectItem(json, "step");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.append_step_json.name, name->valuestring, sizeof(cmd->data.append_step_json.name) - 1);
+                    cmd->data.append_step_json.name[sizeof(cmd->data.append_step_json.name) - 1] = '\0';
+                }
+                if (step && cJSON_IsString(step)) {
+                    strncpy(cmd->data.append_step_json.step, step->valuestring, sizeof(cmd->data.append_step_json.step) - 1);
+                    cmd->data.append_step_json.step[sizeof(cmd->data.append_step_json.step) - 1] = '\0';
+                }
+            }
+            break;
+
+        case CMD_APPEND_STEP_FB: // {"T":223,"name":"mission_a","spd":0.25}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *spd = cJSON_GetObjectItem(json, "spd");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.append_step_fb.name, name->valuestring, sizeof(cmd->data.append_step_fb.name) - 1);
+                    cmd->data.append_step_fb.name[sizeof(cmd->data.append_step_fb.name) - 1] = '\0';
+                }
+                if (spd && cJSON_IsNumber(spd)) cmd->data.append_step_fb.spd = spd->valuedouble;
+            }
+            break;
+
+        case CMD_APPEND_DELAY: // {"T":224,"name":"mission_a","delay":3000}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *delay = cJSON_GetObjectItem(json, "delay");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.append_delay.name, name->valuestring, sizeof(cmd->data.append_delay.name) - 1);
+                    cmd->data.append_delay.name[sizeof(cmd->data.append_delay.name) - 1] = '\0';
+                }
+                if (delay && cJSON_IsNumber(delay)) cmd->data.append_delay.delay = delay->valueint;
+            }
+            break;
+
+        case CMD_INSERT_STEP_JSON: // {"T":225,"name":"mission_a","stepNum":3,"step":"{\"T\":104,\"x\":235,\"y\":0,\"z\":234,\"t\":3.14,\"spd\":0.25}"}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *stepNum = cJSON_GetObjectItem(json, "stepNum");
+                cJSON *step = cJSON_GetObjectItem(json, "step");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.insert_step_json.name, name->valuestring, sizeof(cmd->data.insert_step_json.name) - 1);
+                    cmd->data.insert_step_json.name[sizeof(cmd->data.insert_step_json.name) - 1] = '\0';
+                }
+                if (stepNum && cJSON_IsNumber(stepNum)) cmd->data.insert_step_json.stepNum = stepNum->valueint;
+                if (step && cJSON_IsString(step)) {
+                    strncpy(cmd->data.insert_step_json.step, step->valuestring, sizeof(cmd->data.insert_step_json.step) - 1);
+                    cmd->data.insert_step_json.step[sizeof(cmd->data.insert_step_json.step) - 1] = '\0';
+                }
+            }
+            break;
+
+        case CMD_INSERT_STEP_FB: // {"T":226,"name":"mission_a","stepNum":3,"spd":0.25}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *stepNum = cJSON_GetObjectItem(json, "stepNum");
+                cJSON *spd = cJSON_GetObjectItem(json, "spd");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.insert_step_fb.name, name->valuestring, sizeof(cmd->data.insert_step_fb.name) - 1);
+                    cmd->data.insert_step_fb.name[sizeof(cmd->data.insert_step_fb.name) - 1] = '\0';
+                }
+                if (stepNum && cJSON_IsNumber(stepNum)) cmd->data.insert_step_fb.stepNum = stepNum->valueint;
+                if (spd && cJSON_IsNumber(spd)) cmd->data.insert_step_fb.spd = spd->valuedouble;
+            }
+            break;
+
+        case CMD_INSERT_DELAY: // {"T":227,"stepNum":3,"delay":3000}
+            {
+                cJSON *stepNum = cJSON_GetObjectItem(json, "stepNum");
+                cJSON *delay = cJSON_GetObjectItem(json, "delay");
+                if (stepNum && cJSON_IsNumber(stepNum)) cmd->data.insert_delay.stepNum = stepNum->valueint;
+                if (delay && cJSON_IsNumber(delay)) cmd->data.insert_delay.delay = delay->valueint;
+            }
+            break;
+
+        case CMD_REPLACE_STEP_JSON: // {"T":228,"name":"mission_a","stepNum":3,"step":"{\"T\":114,\"led\":255}"}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *stepNum = cJSON_GetObjectItem(json, "stepNum");
+                cJSON *step = cJSON_GetObjectItem(json, "step");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.replace_step_json.name, name->valuestring, sizeof(cmd->data.replace_step_json.name) - 1);
+                    cmd->data.replace_step_json.name[sizeof(cmd->data.replace_step_json.name) - 1] = '\0';
+                }
+                if (stepNum && cJSON_IsNumber(stepNum)) cmd->data.replace_step_json.stepNum = stepNum->valueint;
+                if (step && cJSON_IsString(step)) {
+                    strncpy(cmd->data.replace_step_json.step, step->valuestring, sizeof(cmd->data.replace_step_json.step) - 1);
+                    cmd->data.replace_step_json.step[sizeof(cmd->data.replace_step_json.step) - 1] = '\0';
+                }
+            }
+            break;
+
+        case CMD_REPLACE_STEP_FB: // {"T":229,"name":"mission_a","stepNum":3,"spd":0.25}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *stepNum = cJSON_GetObjectItem(json, "stepNum");
+                cJSON *spd = cJSON_GetObjectItem(json, "spd");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.replace_step_fb.name, name->valuestring, sizeof(cmd->data.replace_step_fb.name) - 1);
+                    cmd->data.replace_step_fb.name[sizeof(cmd->data.replace_step_fb.name) - 1] = '\0';
+                }
+                if (stepNum && cJSON_IsNumber(stepNum)) cmd->data.replace_step_fb.stepNum = stepNum->valueint;
+                if (spd && cJSON_IsNumber(spd)) cmd->data.replace_step_fb.spd = spd->valuedouble;
+            }
+            break;
+
+        case CMD_REPLACE_DELAY: // {"T":230,"name":"mission_a","stepNum":3,"delay":3000}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *stepNum = cJSON_GetObjectItem(json, "stepNum");
+                cJSON *delay = cJSON_GetObjectItem(json, "delay");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.replace_delay.name, name->valuestring, sizeof(cmd->data.replace_delay.name) - 1);
+                    cmd->data.replace_delay.name[sizeof(cmd->data.replace_delay.name) - 1] = '\0';
+                }
+                if (stepNum && cJSON_IsNumber(stepNum)) cmd->data.replace_delay.stepNum = stepNum->valueint;
+                if (delay && cJSON_IsNumber(delay)) cmd->data.replace_delay.delay = delay->valueint;
+            }
+            break;
+
+        case CMD_DELETE_STEP: // {"T":231,"name":"mission_a","stepNum":3}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *stepNum = cJSON_GetObjectItem(json, "stepNum");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.delete_step.name, name->valuestring, sizeof(cmd->data.delete_step.name) - 1);
+                    cmd->data.delete_step.name[sizeof(cmd->data.delete_step.name) - 1] = '\0';
+                }
+                if (stepNum && cJSON_IsNumber(stepNum)) cmd->data.delete_step.stepNum = stepNum->valueint;
+            }
+            break;
+
+        case CMD_MOVE_TO_STEP: // {"T":241,"name":"mission_a","stepNum":3}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *stepNum = cJSON_GetObjectItem(json, "stepNum");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.move_to_step.name, name->valuestring, sizeof(cmd->data.move_to_step.name) - 1);
+                    cmd->data.move_to_step.name[sizeof(cmd->data.move_to_step.name) - 1] = '\0';
+                }
+                if (stepNum && cJSON_IsNumber(stepNum)) cmd->data.move_to_step.stepNum = stepNum->valueint;
+            }
+            break;
+
+        case CMD_MISSION_PLAY: // {"T":242,"name":"mission_a","times":3}
+            {
+                cJSON *name = cJSON_GetObjectItem(json, "name");
+                cJSON *times = cJSON_GetObjectItem(json, "times");
+                if (name && cJSON_IsString(name)) {
+                    strncpy(cmd->data.mission_play.name, name->valuestring, sizeof(cmd->data.mission_play.name) - 1);
+                    cmd->data.mission_play.name[sizeof(cmd->data.mission_play.name) - 1] = '\0';
+                }
+                if (times && cJSON_IsNumber(times)) cmd->data.mission_play.times = times->valueint;
+            }
+            break;
+
+        case CMD_GET_MAC_ADDRESS: // {"T":302}
+            // No additional data needed
+            break;
+
+        case CMD_WIFI_INFO: // {"T":405}
+            // No additional data needed
+            break;
+
+        case CMD_WIFI_CONFIG_CREATE_BY_STATUS: // {"T":406}
+            // No additional data needed
+            break;
+
+        case CMD_WIFI_STOP: // {"T":408}
+            // No additional data needed
+            break;
+
+        case CMD_REBOOT: // {"T":600}
+            // No additional data needed
+            break;
+
+        case CMD_FREE_FLASH_SPACE: // {"T":601}
+            // No additional data needed
+            break;
+
+        case CMD_BOOT_MISSION_INFO: // {"T":602}
+            // No additional data needed
+            break;
+
+        case CMD_RESET_BOOT_MISSION: // {"T":603}
+            // No additional data needed
+            break;
+
+        case CMD_NVS_CLEAR: // {"T":604}
+            // No additional data needed
+            break;
+
+        case CMD_RESET_EMERGENCY: // {"T":999}
+            // No additional data needed
             break;
 
         default:

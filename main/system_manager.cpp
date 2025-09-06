@@ -22,6 +22,7 @@
 #include "../inc/led_controller.h"
 #include "../inc/mission_system.h"
 #include "../inc/ugv_advanced.h"
+#include "../inc/json_parser.h"
 
 static const char *TAG = "System_Manager";
 
@@ -116,6 +117,9 @@ esp_err_t system_manager_init_hardware(void)
 esp_err_t system_manager_init_communication(void)
 {
     ESP_LOGI(TAG, "Initializing communication...");
+    
+    // Initialize JSON parser (for UART command processing)
+    ESP_ERROR_CHECK(json_parser_init());
     
     // Initialize WiFi - temporarily disabled due to type conflicts
     // ESP_ERROR_CHECK(wifi_controller_init());

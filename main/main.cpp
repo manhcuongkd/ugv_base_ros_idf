@@ -18,6 +18,7 @@
 // Include our custom headers
 #include "../inc/ugv_config.h"
 #include "../inc/json_parser.h"
+#include "../inc/uart_controller.h"
 #include "../inc/oled_controller.h"
 #include "../inc/imu_controller.h"
 #include "../inc/motion_module.h"
@@ -105,11 +106,7 @@ static void main_task(void *pvParameters)
     
     // Main application loop
     while (1) {
-        // Process JSON commands
-        json_command_t cmd;
-        if (xQueueReceive(json_cmd_queue, &cmd, pdMS_TO_TICKS(10)) == pdTRUE) {
-            json_parser_process_command(&cmd);
-        }
+        // JSON commands are now processed directly in uart_controller
         
         // Update system status
         if (ugv_config.base_feedback_flow) {
@@ -256,19 +253,10 @@ static void uart_task(void *pvParameters)
                     uart_buffer[buffer_pos] = '\0';
                     ESP_LOGI(TAG, "Complete JSON command received (%d bytes): %s", buffer_pos, uart_buffer);
                     
-                    // Parse JSON command
-                    json_command_t cmd;
-                    esp_err_t result = json_parser_parse_command(uart_buffer, &cmd);
-                    if (result == ESP_OK) {
-                        ESP_LOGI(TAG, "Successfully parsed command type: %d", cmd.type);
-                        
-                        // Process the command
-                        result = json_parser_process_command(&cmd);
-                        if (result != ESP_OK) {
-                            ESP_LOGE(TAG, "Failed to process command: %s", esp_err_to_name(result));
-                        }
-                    } else {
-                        ESP_LOGE(TAG, "Failed to parse JSON command: %s", esp_err_to_name(result));
+                    // Process the command using uart_controller
+                    esp_err_t result = uart_controller_parse_command(uart_buffer, buffer_pos);
+                    if (result != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to process command: %s", esp_err_to_name(result));
                     }
                     
                     // Reset buffer for next command
