@@ -32,11 +32,9 @@ esp_err_t imu_controller_init(void)
 {
     ESP_LOGI(TAG, "Initializing IMU controller...");
     
-    // Check if I2C is initialized
-    if (i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0) != ESP_OK) {
-        ESP_LOGE(TAG, "I2C driver not installed");
-        return ESP_ERR_INVALID_STATE;
-    }
+    // I2C driver should already be installed by system_manager
+    // We'll verify it's working by attempting a simple I2C operation
+    ESP_LOGI(TAG, "I2C driver should be initialized by system manager");
     
     // Initialize with default configuration
     imu_config.sample_rate_hz = DEFAULT_IMU_SAMPLE_RATE_HZ;
