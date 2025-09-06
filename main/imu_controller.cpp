@@ -36,6 +36,20 @@ esp_err_t imu_controller_init(void)
     // We'll verify it's working by attempting a simple I2C operation
     ESP_LOGI(TAG, "I2C driver should be initialized by system manager");
     
+    // Scan I2C bus to debug connection issues
+    ESP_LOGI(TAG, "Scanning I2C bus...");
+    for (uint8_t addr = 1; addr < 127; addr++) {
+        i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+        i2c_master_start(cmd);
+        i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
+        i2c_master_stop(cmd);
+        esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 50 / portTICK_PERIOD_MS);
+        i2c_cmd_link_delete(cmd);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "I2C device found at address 0x%02X", addr);
+        }
+    }
+    
     // Initialize with default configuration
     imu_config.sample_rate_hz = DEFAULT_IMU_SAMPLE_RATE_HZ;
     imu_config.accel_range = DEFAULT_IMU_ACCEL_RANGE;
@@ -45,11 +59,38 @@ esp_err_t imu_controller_init(void)
     imu_config.enable_fifo = DEFAULT_IMU_ENABLE_FIFO;
     imu_config.low_power_mode = DEFAULT_IMU_LOW_POWER;
     
-    // Check if IMU is present
+    // Check if IMU is present with retry mechanism (like Arduino code)
     uint8_t who_am_i;
-    esp_err_t ret = imu_read_register(ICM20948_WHO_AM_I, &who_am_i, 1);
-    if (ret != ESP_OK || who_am_i != 0xEA) {
-        ESP_LOGE(TAG, "IMU not found at address 0x%02X, WHO_AM_I: 0x%02X", imu_i2c_addr, who_am_i);
+    bool initialized = false;
+    int retry_count = 0;
+    const int max_retries = 10;
+    
+    // Try both possible I2C addresses (0x68 and 0x69)
+    uint8_t addresses[] = {0x68, 0x69};
+    
+    while (!initialized && retry_count < max_retries) {
+        for (int addr_idx = 0; addr_idx < 2 && !initialized; addr_idx++) {
+            imu_i2c_addr = addresses[addr_idx];
+            esp_err_t ret = imu_read_register(ICM20948_WHO_AM_I, &who_am_i, 1);
+            ESP_LOGI(TAG, "IMU initialization attempt %d, address 0x%02X, WHO_AM_I: 0x%02X", 
+                     retry_count + 1, imu_i2c_addr, who_am_i);
+            
+            if (ret == ESP_OK && who_am_i == 0xEA) {
+                initialized = true;
+                ESP_LOGI(TAG, "IMU found and responding correctly at address 0x%02X!", imu_i2c_addr);
+                break;
+            }
+        }
+        
+        if (!initialized) {
+            ESP_LOGW(TAG, "IMU not responding correctly, retrying in 500ms...");
+            vTaskDelay(pdMS_TO_TICKS(500));
+            retry_count++;
+        }
+    }
+    
+    if (!initialized) {
+        ESP_LOGE(TAG, "IMU not found after %d attempts at address 0x%02X, WHO_AM_I: 0x%02X", max_retries, imu_i2c_addr, who_am_i);
         imu_status = IMU_STATUS_COMM_ERROR;
         return ESP_ERR_NOT_FOUND;
     }
