@@ -1,5 +1,6 @@
 #include "../inc/imu_controller.h"
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <driver/i2c.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>

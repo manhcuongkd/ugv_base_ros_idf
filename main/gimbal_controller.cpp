@@ -1,5 +1,6 @@
 #include "../inc/gimbal_controller.h"
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <driver/ledc.h>
 #include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>

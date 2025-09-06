@@ -4,6 +4,8 @@
 #include "../inc/gimbal_controller.h"
 #include <esp_spiffs.h>
 #include <esp_log.h>
+#include <esp_timer.h>
+#include <inttypes.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <string.h>
@@ -643,7 +645,7 @@ esp_err_t files_controller_scan_contents(void)
         return ret;
     }
 
-    ESP_LOGI(TAG, "File system scanned, found %d files", files_status.file_count);
+    ESP_LOGI(TAG, "File system scanned, found %" PRIu32 " files", files_status.file_count);
     return ESP_OK;
 }
 

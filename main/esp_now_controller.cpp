@@ -2,6 +2,7 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_log.h>
+#include <inttypes.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -413,7 +414,7 @@ esp_err_t esp_now_controller_set_flow_control_interval(uint32_t interval_ms)
     }
 
     esp_now_control.flow_control_interval_ms = interval_ms;
-    ESP_LOGI(TAG, "Flow control interval set to %u ms", interval_ms);
+    ESP_LOGI(TAG, "Flow control interval set to %" PRIu32 " ms", interval_ms);
     return ESP_OK;
 }
 

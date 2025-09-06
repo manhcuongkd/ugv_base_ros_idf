@@ -1,5 +1,6 @@
 #include "../inc/oled_controller.h"
 #include <esp_log.h>
+#include <inttypes.h>
 #include <esp_timer.h>
 #include <driver/i2c.h>
 #include <freertos/FreeRTOS.h>
@@ -192,12 +193,12 @@ esp_err_t oled_controller_update_system_info(void) {
     oled_controller_display_text(0, line);
     
     // Line 1: Free heap
-    snprintf(line, sizeof(line), "Heap: %d KB", esp_get_free_heap_size() / 1024);
+    snprintf(line, sizeof(line), "Heap: %" PRIu32 " KB", (uint32_t)(esp_get_free_heap_size() / 1024));
     oled_controller_display_text(1, line);
     
     // Line 2: Uptime
     uint32_t uptime = xTaskGetTickCount() * portTICK_PERIOD_MS / 1000;
-    snprintf(line, sizeof(line), "Uptime: %02d:%02d", uptime / 60, uptime % 60);
+    snprintf(line, sizeof(line), "Uptime: %02" PRIu32 ":%02" PRIu32, uptime / 60, uptime % 60);
     oled_controller_display_text(2, line);
     
     // Line 3: System status

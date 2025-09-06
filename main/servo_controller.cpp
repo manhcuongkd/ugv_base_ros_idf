@@ -1,6 +1,7 @@
 #include "../inc/servo_controller.h"
 #include "../inc/json_parser.h"
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <driver/uart.h>
 #include <driver/gpio.h>
 #include <driver/ledc.h>

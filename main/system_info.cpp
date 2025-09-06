@@ -1,10 +1,18 @@
 #include "../inc/system_info.h"
 #include <esp_log.h>
+#include <inttypes.h>
 #include <esp_system.h>
 #include <esp_spiffs.h>
 #include <nvs_flash.h>
 #include <nvs.h>
 #include <string.h>
+
+// ESP-IDF version compatibility
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#include <esp_flash.h>
+#else
+#include <spi_flash/esp_flash.h>
+#endif
 
 static const char *TAG = "System_Info";
 
@@ -18,7 +26,7 @@ esp_err_t system_info_get_flash_space(void) {
         ESP_LOGE(TAG, "Failed to get flash size: %s", esp_err_to_name(ret));
         return ret;
     }
-    ESP_LOGI(TAG, "Total flash size: %zu bytes (%.2f MB)", flash_size, flash_size / (1024.0 * 1024.0));
+    ESP_LOGI(TAG, "Total flash size: %" PRIu32 " bytes (%.2f MB)", flash_size, flash_size / (1024.0 * 1024.0));
     
     // Get free heap
     size_t free_heap = esp_get_free_heap_size();
@@ -31,7 +39,7 @@ esp_err_t system_info_get_flash_space(void) {
     // Get SPIFFS partition info
     const esp_partition_t *partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "storage");
     if (partition) {
-        ESP_LOGI(TAG, "SPIFFS partition size: %zu bytes (%.2f KB)", partition->size, partition->size / 1024.0);
+        ESP_LOGI(TAG, "SPIFFS partition size: %" PRIu32 " bytes (%.2f KB)", partition->size, partition->size / 1024.0);
         
         // Get SPIFFS usage
         size_t total = 0, used = 0;
