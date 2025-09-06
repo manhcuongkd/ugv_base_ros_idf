@@ -12,6 +12,7 @@
 #include <esp_event.h>
 #include <esp_http_server.h>
 #include <esp_spiffs.h>
+#include <esp_timer.h>
 #include <cJSON.h>
 
 // Include our custom headers
@@ -229,34 +230,62 @@ static void uart_task(void *pvParameters)
     
     ESP_LOGI(TAG, "UART initialized, starting command processing...");
     
-    char* data = (char*) malloc(1024);
+    // UART buffer for accumulating JSON commands (like Arduino implementation)
+    static char uart_buffer[2048];
+    static size_t buffer_pos = 0;
+    static uint32_t last_char_time = 0;
+    const uint32_t JSON_TIMEOUT_MS = 100; // 100ms timeout for JSON completion
+    
+    char* temp_data = (char*) malloc(1024);
     
     // UART command processing loop
     while (1) {
         // Read data from UART
-        int len = uart_read_bytes(UART_NUM_0, data, 1023, pdMS_TO_TICKS(100));
+        int len = uart_read_bytes(UART_NUM_0, temp_data, 1023, pdMS_TO_TICKS(10));
         if (len > 0) {
-            data[len] = '\0';
-            ESP_LOGI(TAG, "Received UART data (%d bytes): %s", len, data);
+            temp_data[len] = '\0';
+            last_char_time = esp_timer_get_time() / 1000; // Convert to milliseconds
             
-            // Parse JSON command
-            json_command_t cmd;
-            esp_err_t result = json_parser_parse_command(data, &cmd);
-            if (result == ESP_OK) {
-                ESP_LOGI(TAG, "Successfully parsed command type: %d", cmd.type);
+            // Append to buffer
+            for (int i = 0; i < len && buffer_pos < sizeof(uart_buffer) - 1; i++) {
+                char c = temp_data[i];
+                uart_buffer[buffer_pos++] = c;
                 
-                // Process the command
-                result = json_parser_process_command(&cmd);
-                if (result != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to process command: %s", esp_err_to_name(result));
+                // Check for end of JSON command (newline character)
+                if (c == '\n') {
+                    uart_buffer[buffer_pos] = '\0';
+                    ESP_LOGI(TAG, "Complete JSON command received (%d bytes): %s", buffer_pos, uart_buffer);
+                    
+                    // Parse JSON command
+                    json_command_t cmd;
+                    esp_err_t result = json_parser_parse_command(uart_buffer, &cmd);
+                    if (result == ESP_OK) {
+                        ESP_LOGI(TAG, "Successfully parsed command type: %d", cmd.type);
+                        
+                        // Process the command
+                        result = json_parser_process_command(&cmd);
+                        if (result != ESP_OK) {
+                            ESP_LOGE(TAG, "Failed to process command: %s", esp_err_to_name(result));
+                        }
+                    } else {
+                        ESP_LOGE(TAG, "Failed to parse JSON command: %s", esp_err_to_name(result));
+                    }
+                    
+                    // Reset buffer for next command
+                    buffer_pos = 0;
                 }
-            } else {
-                ESP_LOGE(TAG, "Failed to parse JSON command: %s", esp_err_to_name(result));
             }
+        }
+        
+        // Handle timeout for incomplete JSON (like Arduino implementation)
+        uint32_t current_time = esp_timer_get_time() / 1000;
+        if (buffer_pos > 0 && (current_time - last_char_time > JSON_TIMEOUT_MS)) {
+            ESP_LOGW(TAG, "JSON timeout - clearing buffer (%d bytes): %.*s", buffer_pos, buffer_pos, uart_buffer);
+            buffer_pos = 0;
         }
         
         vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz UART processing rate
     }
     
-    free(data);
+    free(temp_data);
 }
