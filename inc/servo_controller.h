@@ -10,6 +10,60 @@
 extern "C" {
 #endif
 
+// SCServo Protocol Constants
+#define SCSERVO_HEADER1 0xFF
+#define SCSERVO_HEADER2 0xFF
+#define SCSERVO_BROADCAST_ID 0xFE
+
+// SCServo Instructions
+#define INST_PING 0x01
+#define INST_READ 0x02
+#define INST_WRITE 0x03
+#define INST_REG_WRITE 0x04
+#define INST_ACTION 0x05
+#define INST_FACTORY_RESET 0x06
+#define INST_REBOOT 0x08
+#define INST_SYNC_WRITE 0x83
+#define INST_BULK_READ 0x92
+
+// SCServo Memory Map (SCSCL Registers)
+//-------EPROM(只读)--------
+#define SCSCL_VERSION_L 3
+#define SCSCL_VERSION_H 4
+
+//-------EPROM(读写)--------
+#define SCSCL_ID 5
+#define SCSCL_BAUD_RATE 6
+#define SCSCL_MIN_ANGLE_LIMIT_L 9
+#define SCSCL_MIN_ANGLE_LIMIT_H 10
+#define SCSCL_MAX_ANGLE_LIMIT_L 11
+#define SCSCL_MAX_ANGLE_LIMIT_H 12
+#define SCSCL_CW_DEAD 26
+#define SCSCL_CCW_DEAD 27
+
+//-------SRAM(读写)--------
+#define SCSCL_TORQUE_ENABLE 40
+#define SCSCL_GOAL_POSITION_L 42
+#define SCSCL_GOAL_POSITION_H 43
+#define SCSCL_GOAL_TIME_L 44
+#define SCSCL_GOAL_TIME_H 45
+#define SCSCL_GOAL_SPEED_L 46
+#define SCSCL_GOAL_SPEED_H 47
+#define SCSCL_LOCK 48
+
+//-------SRAM(只读)--------
+#define SCSCL_PRESENT_POSITION_L 56
+#define SCSCL_PRESENT_POSITION_H 57
+#define SCSCL_PRESENT_SPEED_L 58
+#define SCSCL_PRESENT_SPEED_H 59
+#define SCSCL_PRESENT_LOAD_L 60
+#define SCSCL_PRESENT_LOAD_H 61
+#define SCSCL_PRESENT_VOLTAGE 62
+#define SCSCL_PRESENT_TEMPERATURE 63
+#define SCSCL_MOVING 66
+#define SCSCL_PRESENT_CURRENT_L 69
+#define SCSCL_PRESENT_CURRENT_H 70
+
 // Servo status
 typedef enum {
     SERVO_STATUS_OK = 0,           // Servo working normally
@@ -454,6 +508,24 @@ esp_err_t servo_controller_get_load(uint8_t servo_id, uint16_t *load);
  * @return ESP_OK on success, error code otherwise
  */
 esp_err_t servo_controller_send_error_feedback(uint8_t servo_id, uint8_t error_status);
+
+// SCServo Protocol Functions
+esp_err_t scservo_write_pos(uint8_t id, uint16_t position, uint16_t time, uint16_t speed);
+esp_err_t scservo_write_pos_ex(uint8_t id, int16_t position, uint16_t speed, uint8_t acc);
+esp_err_t scservo_reg_write_pos(uint8_t id, uint16_t position, uint16_t time, uint16_t speed);
+esp_err_t scservo_reg_write_pos_ex(uint8_t id, int16_t position, uint16_t speed, uint8_t acc);
+esp_err_t scservo_sync_write_pos(uint8_t *ids, uint8_t id_count, uint16_t *positions, uint16_t *times, uint16_t *speeds);
+esp_err_t scservo_sync_write_pos_ex(uint8_t *ids, uint8_t id_count, int16_t *positions, uint16_t *speeds, uint8_t *accs);
+esp_err_t scservo_enable_torque(uint8_t id, uint8_t enable);
+esp_err_t scservo_read_pos(uint8_t id, uint16_t *position);
+esp_err_t scservo_read_speed(uint8_t id, uint16_t *speed);
+esp_err_t scservo_read_load(uint8_t id, uint16_t *load);
+esp_err_t scservo_read_voltage(uint8_t id, uint8_t *voltage);
+esp_err_t scservo_read_temperature(uint8_t id, uint8_t *temperature);
+esp_err_t scservo_read_moving(uint8_t id, uint8_t *moving);
+esp_err_t scservo_ping(uint8_t id);
+esp_err_t scservo_factory_reset(uint8_t id);
+esp_err_t scservo_reboot(uint8_t id);
 
 // Global variables (extern declarations)
 // servo_feedback array is defined as static in servo_controller.cpp

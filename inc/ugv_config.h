@@ -173,6 +173,11 @@ typedef struct {
 #define SPIFFS_MAX_FILES       5
 #define SPIFFS_PARTITION_LABEL "spiffs"
 
+// Gimbal servo configuration
+#define GIMBAL_PAN_ID  2
+#define GIMBAL_TILT_ID 1
+#define SERVO_STOP_DELAY 3
+
 #ifdef __cplusplus
 }
 #endif

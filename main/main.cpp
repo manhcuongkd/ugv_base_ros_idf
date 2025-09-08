@@ -21,6 +21,7 @@
 #include "../inc/uart_controller.h"
 #include "../inc/oled_controller.h"
 #include "../inc/imu_controller.h"
+#include "../inc/gimbal_controller.h"
 #include "../inc/motion_module.h"
 #include "../inc/mission_system.h"
 #include "../inc/ugv_advanced.h"
@@ -167,7 +168,7 @@ static void imu_task(void *pvParameters)
             // Process IMU data
             if (ugv_config.module_type == 2) { // Gimbal mode
                 // Apply gimbal stabilization
-                // gimbal_controller_stabilize(&imu_data);
+                gimbal_controller_stabilize(&imu_data);
             }
         }
         
@@ -188,17 +189,19 @@ static void motion_task(void *pvParameters)
     // Initialize PID controllers
     motion_module_init_pid();
     
-    // Motion control loop
+    // Motion control loop (matching Arduino loop sequence)
     while (1) {
         if (!system_manager_is_emergency_stop()) {
             // Update encoder readings
             motion_module_update_encoders();
             
-            // Compute PID control
-            motion_module_compute_pid();
+            // Get wheel speeds (matching Arduino getLeftSpeed/getRightSpeed)
+            motion_module_get_left_speed();
+            motion_module_get_right_speed();
             
-            // Apply motor control
-            motion_module_apply_motor_control();
+            // Compute PID control (matching Arduino LeftPidControllerCompute/RightPidControllerCompute)
+            motion_module_left_pid_compute();
+            motion_module_right_pid_compute();
         }
         
         vTaskDelay(pdMS_TO_TICKS(20)); // 50Hz motion control rate

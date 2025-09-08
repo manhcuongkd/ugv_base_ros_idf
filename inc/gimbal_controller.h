@@ -11,6 +11,8 @@
 // Gimbal Configuration
 #define GIMBAL_PAN_PIN 26      // Pan servo pin
 #define GIMBAL_TILT_PIN 27     // Tilt servo pin
+#define GIMBAL_PAN_ID 2        // Pan servo ID
+#define GIMBAL_TILT_ID 1       // Tilt servo ID
 #define GIMBAL_PAN_CENTER 1500 // Pan center position (us)
 #define GIMBAL_TILT_CENTER 1500 // Tilt center position (us)
 #define GIMBAL_PAN_MIN 500     // Pan minimum position (us)
@@ -19,6 +21,11 @@
 #define GIMBAL_TILT_MAX 2500   // Tilt maximum position (us)
 #define GIMBAL_PWM_FREQ 50     // PWM frequency (Hz)
 #define GIMBAL_PWM_RESOLUTION 16 // PWM resolution (bits)
+#define SERVO_STOP_DELAY 3     // Servo stop delay (ms)
+
+// Servo Communication
+#define GIMBAL_SERVO_BAUD_RATE 1000000  // Servo communication baud rate
+#define GIMBAL_SERVO_TIMEOUT 100        // Servo communication timeout (ms)
 
 // Gimbal Control Modes
 #define GIMBAL_MODE_MANUAL 0
@@ -61,6 +68,18 @@ typedef struct {
     float acceleration;
 } gimbal_command_t;
 
+// Servo Feedback Structure
+typedef struct {
+    bool status;
+    uint16_t pos;
+    int16_t speed;
+    int16_t load;
+    float voltage;
+    float current;
+    float temper;
+    uint8_t mode;
+} gimbal_feedback_t;
+
 // Function Prototypes
 esp_err_t gimbal_controller_init(void);
 esp_err_t gimbal_controller_deinit(void);
@@ -91,6 +110,13 @@ uint16_t gimbal_controller_degrees_to_pulse(float degrees, uint8_t axis);
 float gimbal_controller_pulse_to_degrees(uint16_t pulse, uint8_t axis);
 esp_err_t gimbal_controller_smooth_move(uint16_t pan_target, uint16_t tilt_target, 
                                        float speed, float acceleration);
+
+// Servo Feedback Functions
+esp_err_t gimbal_controller_get_feedback(gimbal_feedback_t *pan_fb, gimbal_feedback_t *tilt_fb);
+esp_err_t gimbal_controller_set_torque(uint8_t servo_id, bool enable);
+
+// User Control Functions
+esp_err_t gimbal_controller_user_control(int8_t input_x, int8_t input_y, uint16_t speed);
 
 /**
  * @brief Stabilize gimbal using IMU data

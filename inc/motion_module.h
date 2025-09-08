@@ -183,6 +183,22 @@ esp_err_t motion_module_save_speed_rates(void);
 esp_err_t motion_module_set_type(uint8_t main_type, uint8_t module_type);
 
 /**
+ * @brief Get current motion configuration
+ * @param wheel_d Pointer to store wheel diameter
+ * @param pulses Pointer to store encoder pulses per revolution
+ * @param track_w Pointer to store track width
+ * @param motor_dir Pointer to store motor direction flag
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t motion_module_get_config(double *wheel_d, int32_t *pulses, double *track_w, bool *motor_dir);
+
+/**
+ * @brief Load motion configuration from NVS
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t motion_module_load_config_from_nvs(void);
+
+/**
  * @brief Get current motion status
  * @param status Pointer to motion control structure
  * @return ESP_OK on success, error code otherwise
@@ -226,6 +242,26 @@ esp_err_t motion_module_init_pwm(void);
  * @return ESP_OK on success, error code otherwise
  */
 esp_err_t motion_module_set_motor(uint8_t motor_id, int8_t direction, uint16_t pwm_value);
+
+/**
+ * @brief Get left wheel speed (called from main loop)
+ */
+void motion_module_get_left_speed(void);
+
+/**
+ * @brief Get right wheel speed (called from main loop)
+ */
+void motion_module_get_right_speed(void);
+
+/**
+ * @brief Compute left motor PID (called from main loop)
+ */
+void motion_module_left_pid_compute(void);
+
+/**
+ * @brief Compute right motor PID (called from main loop)
+ */
+void motion_module_right_pid_compute(void);
 
 // Global variables (defined as static in motion_module.cpp)
 // pid_controller_t left_pid_controller;

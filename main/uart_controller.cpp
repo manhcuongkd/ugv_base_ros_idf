@@ -34,7 +34,6 @@ static const char *TAG = "UART_Controller";
 // Global variables
 static bool uart_initialized = false;
 static bool echo_mode = false;
-static bool heartbeat_enabled = true;
 static uint32_t heartbeat_delay_ms = 1000;
 static uint32_t last_cmd_time = 0;
 static uint32_t feedback_interval_ms = 100;
@@ -201,7 +200,7 @@ static esp_err_t uart_parse_command(const char *data, size_t len)
             oled_controller_control(cmd.data.oled_ctrl.lineNum, cmd.data.oled_ctrl.Text);
             break;
 
-        case CMD_OLED_DEFAULT: // {"T":-3}
+        case (uint16_t)CMD_OLED_DEFAULT: // {"T":-3}
             ESP_LOGI(TAG, "OLED default");
             oled_controller_reset_to_default();
             break;

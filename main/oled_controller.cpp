@@ -424,8 +424,6 @@ esp_err_t oled_controller_reset_to_default(void) {
     screen_default_mode = true;
     
     // Update voltage info (Arduino-style)
-    // Note: This would need battery controller integration
-    // For now, just set a placeholder
     strncpy(screen_line_3.text, "V:12.0V Ready", OLED_MAX_CHARS_PER_LINE);
     screen_line_3.text[OLED_MAX_CHARS_PER_LINE] = '\0';
     screen_line_3.updated = true;

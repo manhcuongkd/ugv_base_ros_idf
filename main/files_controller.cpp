@@ -17,8 +17,7 @@
 static const char *TAG = "Files_Controller";
 
 // File system configuration
-#define SPIFFS_PARTITION_LABEL "storage"
-#define SPIFFS_MAX_FILES 10
+// SPIFFS_PARTITION_LABEL and SPIFFS_MAX_FILES are defined in ugv_config.h
 #define SPIFFS_MAX_PATH_LEN 64
 #define SPIFFS_MAX_FILE_SIZE 4096
 

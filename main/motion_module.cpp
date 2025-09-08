@@ -1,5 +1,7 @@
 #include "../inc/motion_module.h"
+#include "../inc/oled_controller.h"
 #include <esp_log.h>
+#include <inttypes.h>
 #include <driver/gpio.h>
 #include <driver/ledc.h>
 #include <nvs_flash.h>
@@ -12,29 +14,32 @@
 
 static const char *TAG = "MotionModule";
 
-// Global variables (matching Arduino)
+// Global variables
 static bool motion_initialized = false;
-static float spd_rate_A = 1.0f;  // Left motor speed rate
-static float spd_rate_B = 1.0f;  // Right motor speed rate
-static bool usePIDCompute = true;
-static bool heartbeatStopFlag = false;
+static float left_speed_rate = 1.0f;   // Left motor speed rate
+static float right_speed_rate = 1.0f;  // Right motor speed rate
+static bool pid_compute_enabled = true;
 
-// Encoder variables (matching Arduino)
-static int lastEncoderA = 0;
-static int lastEncoderB = 0;
-static double speedGetA = 0.0;
-static double speedGetB = 0.0;
-static double plusesRate = M_PI * WHEEL_D / ONE_CIRCLE_PLUSES;
-static uint64_t lastLeftSpdTime = 0;
-static uint64_t lastRightSpdTime = 0;
+// Runtime configurable motion parameters (matching Arduino mm_settings)
+static double wheel_diameter = WHEEL_D;           // Wheel diameter in meters
+static int32_t one_circle_pulses = ONE_CIRCLE_PLUSES;  // Encoder pulses per wheel revolution
+static double track_width = TRACK_WIDTH;          // Distance between wheels in meters
+static bool motor_direction = SET_MOTOR_DIR;      // Motor direction flag
 
-// PID variables (matching Arduino)
-static double outputA = 0.0;
-static double outputB = 0.0;
-static double setpointA = 0.0;
-static double setpointB = 0.0;
-static float setpointA_buffer = 0.0f;
-static float setpointB_buffer = 0.0f;
+// Encoder variables
+static int32_t last_left_encoder_count = 0;
+static int32_t last_right_encoder_count = 0;
+static double left_wheel_speed = 0.0;
+static double right_wheel_speed = 0.0;
+static double encoder_pulse_rate = M_PI * WHEEL_D / ONE_CIRCLE_PLUSES;
+static uint64_t last_left_speed_time = 0;
+static uint64_t last_right_speed_time = 0;
+
+// PID variables
+static double left_pid_output = 0.0;
+static double right_pid_output = 0.0;
+static double left_setpoint = 0.0;
+static double right_setpoint = 0.0;
 
 // PID controller structures
 static pid_controller_t left_pid_controller;
@@ -52,21 +57,19 @@ static void encoder_isr_handler(void *arg);
 static void update_encoder_data(void);
 static float compute_pid(pid_controller_t *pid, float setpoint, float input);
 
-// Arduino-style motor control functions
-static void switchPortCtrlA(float pwmInputA);
-static void switchPortCtrlB(float pwmInputB);
-static void leftCtrl(float pwmInputA);
-static void rightCtrl(float pwmInputB);
-static void getLeftSpeed(void);
-static void getRightSpeed(void);
-static void LeftPidControllerCompute(void);
-static void RightPidControllerCompute(void);
+// Motor control functions
+static void motor_left_control(float pwm_input);
+static void motor_right_control(float pwm_input);
+static void calculate_left_wheel_speed(void);
+static void calculate_right_wheel_speed(void);
+static void compute_left_pid_controller(void);
+static void compute_right_pid_controller(void);
 
 esp_err_t motion_module_init(void)
 {
-    ESP_LOGI(TAG, "Initializing motion module (Arduino-style)...");
+    ESP_LOGI(TAG, "Initializing motion module...");
     
-    // Initialize GPIO pins (matching Arduino movtionPinInit)
+    // Initialize GPIO pins for motor control
     gpio_config_t io_conf = {};
     io_conf.mode = GPIO_MODE_OUTPUT;
     io_conf.pin_bit_mask = (1ULL << AIN1) | (1ULL << AIN2) | (1ULL << BIN1) | (1ULL << BIN2);
@@ -75,7 +78,7 @@ esp_err_t motion_module_init(void)
     io_conf.intr_type = GPIO_INTR_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&io_conf));
     
-    // Set initial pin states (matching Arduino)
+    // Set initial pin states
     gpio_set_level(AIN1, 0);
     gpio_set_level(AIN2, 0);
     gpio_set_level(BIN1, 0);
@@ -91,7 +94,7 @@ esp_err_t motion_module_init(void)
     memset(&current_motion_status, 0, sizeof(motion_control_t));
     memset(&current_encoder_data, 0, sizeof(encoder_data_t));
     
-    // Initialize PID controllers (matching Arduino pidControllerInit)
+    // Initialize PID controllers
     memset(&left_pid_controller, 0, sizeof(pid_controller_t));
     memset(&right_pid_controller, 0, sizeof(pid_controller_t));
     
@@ -102,7 +105,14 @@ esp_err_t motion_module_init(void)
     current_encoder_data.right_speed = 0.0f;
     
     motion_initialized = true;
-    ESP_LOGI(TAG, "Motion module initialized successfully (Arduino-style)");
+    
+    // Load saved configuration from NVS (this will also update OLED display)
+    esp_err_t config_ret = motion_module_load_config_from_nvs();
+    if (config_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to load configuration from NVS: %s", esp_err_to_name(config_ret));
+    }
+    
+    ESP_LOGI(TAG, "Motion module initialized successfully");
     
     return ESP_OK;
 }
@@ -180,22 +190,42 @@ esp_err_t motion_module_get_encoder_data(encoder_data_t *data)
 
 esp_err_t motion_module_compute_pid(void)
 {
-    if (!motion_initialized) {
+    if (!motion_initialized || !pid_compute_enabled) {
         return ESP_ERR_INVALID_STATE;
     }
     
     // Compute PID for left motor
     if (left_pid_controller.enabled) {
         left_pid_controller.output = compute_pid(&left_pid_controller, 
-                                               left_pid_controller.setpoint, 
-                                               current_encoder_data.left_speed);
+                                               left_setpoint, 
+                                               left_wheel_speed);
+        
+        // Apply threshold
+        if (abs(left_pid_controller.output) < PID_THRESHOLD_PWM) {
+            left_pid_controller.output = 0;
+        }
+        
+        // Stop if both setpoint and speed are zero
+        if (left_setpoint == 0 && left_wheel_speed == 0) {
+            left_pid_controller.output = 0;
+        }
     }
     
     // Compute PID for right motor
     if (right_pid_controller.enabled) {
         right_pid_controller.output = compute_pid(&right_pid_controller, 
-                                                right_pid_controller.setpoint, 
-                                                current_encoder_data.right_speed);
+                                                right_setpoint, 
+                                                right_wheel_speed);
+        
+        // Apply threshold
+        if (abs(right_pid_controller.output) < PID_THRESHOLD_PWM) {
+            right_pid_controller.output = 0;
+        }
+        
+        // Stop if both setpoint and speed are zero
+        if (right_setpoint == 0 && right_wheel_speed == 0) {
+            right_pid_controller.output = 0;
+        }
     }
     
     return ESP_OK;
@@ -208,20 +238,20 @@ esp_err_t motion_module_apply_motor_control(void)
     }
     
     // Apply PID output to motors
-    int left_pwm = (int)left_pid_controller.output;
-    int right_pwm = (int)right_pid_controller.output;
+    float left_pwm = left_pid_output;
+    float right_pwm = right_pid_output;
     
     // Apply speed rates to PWM values
-    left_pwm = (int)(left_pwm * spd_rate_A);
-    right_pwm = (int)(right_pwm * spd_rate_B);
+    left_pwm = left_pwm * left_speed_rate;
+    right_pwm = right_pwm * right_speed_rate;
     
     // Limit PWM values
     left_pwm = (left_pwm > PWM_MAX_DUTY) ? PWM_MAX_DUTY : (left_pwm < -PWM_MAX_DUTY) ? -PWM_MAX_DUTY : left_pwm;
     right_pwm = (right_pwm > PWM_MAX_DUTY) ? PWM_MAX_DUTY : (right_pwm < -PWM_MAX_DUTY) ? -PWM_MAX_DUTY : right_pwm;
     
     // Apply to motors
-    motion_module_set_motor(0, left_pwm > 0 ? 1 : -1, abs(left_pwm));
-    motion_module_set_motor(1, right_pwm > 0 ? 1 : -1, abs(right_pwm));
+    motor_left_control(left_pwm);
+    motor_right_control(right_pwm);
     
     return ESP_OK;
 }
@@ -232,19 +262,27 @@ esp_err_t motion_module_set_speeds(float left_speed, float right_speed)
         return ESP_ERR_INVALID_STATE;
     }
     
-    // Limit speeds
-    left_speed = (left_speed > 1.0f) ? 1.0f : (left_speed < -1.0f) ? -1.0f : left_speed;
-    right_speed = (right_speed > 1.0f) ? 1.0f : (right_speed < -1.0f) ? -1.0f : right_speed;
+    // Limit speeds to valid range (-2.0 to 2.0)
+    left_speed = (left_speed > 2.0f) ? 2.0f : (left_speed < -2.0f) ? -2.0f : left_speed;
+    right_speed = (right_speed > 2.0f) ? 2.0f : (right_speed < -2.0f) ? -2.0f : right_speed;
     
-    // Set PID setpoints
-    left_pid_controller.setpoint = left_speed * MOTOR_MAX_SPEED;
-    right_pid_controller.setpoint = right_speed * MOTOR_MAX_SPEED;
+    // Enable PID computation
+    pid_compute_enabled = true;
+    
+    // Set setpoints with speed rate scaling
+    left_setpoint = left_speed * left_speed_rate;
+    right_setpoint = right_speed * right_speed_rate;
+    
+    // Update PID controller setpoints
+    left_pid_controller.setpoint = left_setpoint;
+    right_pid_controller.setpoint = right_setpoint;
     
     // Update motion status
     current_motion_status.left_speed = left_speed;
     current_motion_status.right_speed = right_speed;
     
-    ESP_LOGI(TAG, "Set speeds: L=%.2f, R=%.2f", left_speed, right_speed);
+    ESP_LOGI(TAG, "Set speeds: L=%.2f, R=%.2f (setpoints: L=%.2f, R=%.2f)", 
+             left_speed, right_speed, left_setpoint, right_setpoint);
     
     return ESP_OK;
 }
@@ -255,29 +293,21 @@ esp_err_t motion_module_set_ros_motion(float linear_speed, float angular_speed)
         return ESP_ERR_INVALID_STATE;
     }
     
-    // Convert ROS-style motion to left/right wheel speeds
-    // For differential drive: v_left = v_linear - v_angular * wheelbase/2
-    //                        v_right = v_linear + v_angular * wheelbase/2
-    const float wheelbase = 0.2f; // 20cm wheelbase (adjust for your robot)
+    // Convert ROS-style motion to left/right wheel speeds (matching Arduino rosCtrl)
+    // For differential drive: v_left = v_linear - v_angular * track_width/2
+    //                        v_right = v_linear + v_angular * track_width/2
+    float left_speed = linear_speed - (angular_speed * track_width / 2.0f);
+    float right_speed = linear_speed + (angular_speed * track_width / 2.0f);
     
-    float left_speed = linear_speed - angular_speed * wheelbase / 2.0f;
-    float right_speed = linear_speed + angular_speed * wheelbase / 2.0f;
-    
-    // Normalize speeds
-    float max_speed = fmaxf(fabsf(left_speed), fabsf(right_speed));
-    if (max_speed > MOTOR_MAX_SPEED) {
-        left_speed = left_speed * MOTOR_MAX_SPEED / max_speed;
-        right_speed = right_speed * MOTOR_MAX_SPEED / max_speed;
-    }
-    
-    // Set the speeds
+    // Set the speeds using the standard speed control
     ESP_ERROR_CHECK(motion_module_set_speeds(left_speed, right_speed));
     
     // Update motion status
     current_motion_status.linear_speed = linear_speed;
     current_motion_status.angular_speed = angular_speed;
     
-    ESP_LOGI(TAG, "Set ROS motion: linear=%.2f, angular=%.2f", linear_speed, angular_speed);
+    ESP_LOGI(TAG, "Set ROS motion: linear=%.2f, angular=%.2f -> L=%.2f, R=%.2f", 
+             linear_speed, angular_speed, left_speed, right_speed);
     
     return ESP_OK;
 }
@@ -409,10 +439,10 @@ esp_err_t motion_module_set_speed_rates(float left_rate, float right_rate)
     }
     
     // Limit rates to 0.0 - 1.0
-    spd_rate_A = (left_rate > 1.0f) ? 1.0f : (left_rate < 0.0f) ? 0.0f : left_rate;
-    spd_rate_B = (right_rate > 1.0f) ? 1.0f : (right_rate < 0.0f) ? 0.0f : right_rate;
+    left_speed_rate = (left_rate > 1.0f) ? 1.0f : (left_rate < 0.0f) ? 0.0f : left_rate;
+    right_speed_rate = (right_rate > 1.0f) ? 1.0f : (right_rate < 0.0f) ? 0.0f : right_rate;
     
-    ESP_LOGI(TAG, "Speed rates set: L=%.2f, R=%.2f", spd_rate_A, spd_rate_B);
+    ESP_LOGI(TAG, "Speed rates set: L=%.2f, R=%.2f", left_speed_rate, right_speed_rate);
     
     return ESP_OK;
 }
@@ -547,21 +577,18 @@ static esp_err_t init_encoder_pins(void)
 
 static void encoder_isr_handler(void *arg)
 {
-    // Arduino-style quadrature encoder ISR handler
-    // Based on ESP32Encoder library logic from Arduino project
+    // Proper quadrature encoder ISR handler
     uint32_t pin_num = (uint32_t)arg;
     
-    // Read current state of both encoder pins
-    int a_state = gpio_get_level(AENCA);
-    int b_state = gpio_get_level(AENCB);
-    
     if (pin_num == 0 || pin_num == 1) { // Left encoder (AENCA/AENCB)
-        // Quadrature encoding: determine direction based on A and B states
         static int last_a_state = 0;
         static int last_b_state = 0;
         
+        int a_state = gpio_get_level(AENCA);
+        int b_state = gpio_get_level(AENCB);
+        
+        // Quadrature decoding: A leads B for forward, B leads A for reverse
         if (a_state != last_a_state) {
-            // A pin changed - check B state to determine direction
             if (a_state == b_state) {
                 current_encoder_data.left_count++;
             } else {
@@ -570,7 +597,6 @@ static void encoder_isr_handler(void *arg)
             last_a_state = a_state;
         }
         if (b_state != last_b_state) {
-            // B pin changed - check A state to determine direction
             if (b_state != a_state) {
                 current_encoder_data.left_count++;
             } else {
@@ -579,12 +605,14 @@ static void encoder_isr_handler(void *arg)
             last_b_state = b_state;
         }
     } else if (pin_num == 2 || pin_num == 3) { // Right encoder (BENCA/BENCB)
-        // Quadrature encoding: determine direction based on A and B states
         static int last_a_state_r = 0;
         static int last_b_state_r = 0;
         
+        int a_state = gpio_get_level(BENCA);
+        int b_state = gpio_get_level(BENCB);
+        
+        // Quadrature decoding: A leads B for forward, B leads A for reverse
         if (a_state != last_a_state_r) {
-            // A pin changed - check B state to determine direction
             if (a_state == b_state) {
                 current_encoder_data.right_count++;
             } else {
@@ -593,7 +621,6 @@ static void encoder_isr_handler(void *arg)
             last_a_state_r = a_state;
         }
         if (b_state != last_b_state_r) {
-            // B pin changed - check A state to determine direction
             if (b_state != a_state) {
                 current_encoder_data.right_count++;
             } else {
@@ -606,27 +633,39 @@ static void encoder_isr_handler(void *arg)
 
 static void update_encoder_data(void)
 {
-    // Update encoder data from ISR counts
     // Calculate speed based on encoder counts and time
     static uint32_t last_update_time = 0;
+    static int32_t last_left_count = 0;
+    static int32_t last_right_count = 0;
+    
     uint32_t current_time = esp_timer_get_time() / 1000; // Convert to ms
     
     if (last_update_time > 0) {
         float dt = (current_time - last_update_time) / 1000.0f; // Convert to seconds
         
-        // Calculate speed in counts per second
-        current_encoder_data.left_speed = current_encoder_data.left_count / dt;
-        current_encoder_data.right_speed = current_encoder_data.right_count / dt;
-        
-        // Convert to wheel speed (assuming 20 counts per revolution)
-        const float COUNTS_PER_REVOLUTION = 20.0f;
-        // Store wheel speeds in the available fields
-        current_encoder_data.left_speed = (current_encoder_data.left_speed / COUNTS_PER_REVOLUTION) * 2 * M_PI;
-        current_encoder_data.right_speed = (current_encoder_data.right_speed / COUNTS_PER_REVOLUTION) * 2 * M_PI;
-        
-        // Reset counts for next calculation
-        current_encoder_data.left_count = 0;
-        current_encoder_data.right_count = 0;
+        if (dt > 0.001f) { // Minimum 1ms time difference
+            // Calculate speed in counts per second
+            int32_t left_delta = current_encoder_data.left_count - last_left_count;
+            int32_t right_delta = current_encoder_data.right_count - last_right_count;
+            
+            // Apply motor direction if needed
+            if (motor_direction) {
+                left_delta = -left_delta;
+                right_delta = -right_delta;
+            }
+            
+            // Convert to wheel speed (m/s)
+            current_encoder_data.left_speed = (left_delta * encoder_pulse_rate) / dt;
+            current_encoder_data.right_speed = (right_delta * encoder_pulse_rate) / dt;
+            
+            // Update last values
+            last_left_count = current_encoder_data.left_count;
+            last_right_count = current_encoder_data.right_count;
+        }
+    } else {
+        // First call - initialize
+        last_left_count = current_encoder_data.left_count;
+        last_right_count = current_encoder_data.right_count;
     }
     
     last_update_time = current_time;
@@ -673,8 +712,8 @@ esp_err_t motion_module_get_speed_rates(float *left_rate, float *right_rate) {
         return ESP_ERR_INVALID_ARG;
     }
     
-    *left_rate = spd_rate_A;
-    *right_rate = spd_rate_B;
+    *left_rate = left_speed_rate;
+    *right_rate = right_speed_rate;
     
     ESP_LOGI(TAG, "Speed rates retrieved: L=%.2f, R=%.2f", *left_rate, *right_rate);
     return ESP_OK;
@@ -694,9 +733,9 @@ esp_err_t motion_module_save_speed_rates(void) {
     }
     
     // Save speed rates as individual values
-    ret = nvs_set_u32(nvs_handle, "left_speed_rate", *(uint32_t*)&spd_rate_A);
+    ret = nvs_set_u32(nvs_handle, "left_speed_rate", *(uint32_t*)&left_speed_rate);
     if (ret == ESP_OK) {
-        ret = nvs_set_u32(nvs_handle, "right_speed_rate", *(uint32_t*)&spd_rate_B);
+        ret = nvs_set_u32(nvs_handle, "right_speed_rate", *(uint32_t*)&right_speed_rate);
     }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to save speed rates: %s", esp_err_to_name(ret));
@@ -715,6 +754,68 @@ esp_err_t motion_module_set_type(uint8_t main_type, uint8_t module_type) {
     }
     
     ESP_LOGI(TAG, "Setting module type: main=%d, module=%d", main_type, module_type);
+    
+    // Configure motion parameters based on main_type (matching Arduino mm_settings)
+    const char* robot_name = "Unknown";
+    switch (main_type) {
+        case 1: // RaspRover
+            ESP_LOGI(TAG, "Configuring for RaspRover");
+            robot_name = "RaspRover";
+            wheel_diameter = 0.0800;
+            one_circle_pulses = 2100;
+            track_width = 0.125;
+            motor_direction = false;
+            ESP_LOGI(TAG, "RaspRover config: WHEEL_D=%.4f, ONE_CIRCLE_PLUSES=%" PRId32 ", TRACK_WIDTH=%.3f, SET_MOTOR_DIR=%s",
+                     wheel_diameter, one_circle_pulses, track_width, motor_direction ? "true" : "false");
+            break;
+            
+        case 2: // UGV Rover
+            ESP_LOGI(TAG, "Configuring for UGV Rover");
+            robot_name = "UGV Rover";
+            wheel_diameter = 0.0800;
+            one_circle_pulses = 660;
+            track_width = 0.172;
+            motor_direction = false;
+            ESP_LOGI(TAG, "UGV Rover config: WHEEL_D=%.4f, ONE_CIRCLE_PLUSES=%" PRId32 ", TRACK_WIDTH=%.3f, SET_MOTOR_DIR=%s",
+                     wheel_diameter, one_circle_pulses, track_width, motor_direction ? "true" : "false");
+            break;
+            
+        case 3: // UGV Beast
+            ESP_LOGI(TAG, "Configuring for UGV Beast");
+            robot_name = "UGV Beast";
+            wheel_diameter = 0.0523;
+            one_circle_pulses = 1092;
+            track_width = 0.141;
+            motor_direction = true;
+            ESP_LOGI(TAG, "UGV Beast config: WHEEL_D=%.4f, ONE_CIRCLE_PLUSES=%" PRId32 ", TRACK_WIDTH=%.3f, SET_MOTOR_DIR=%s",
+                     wheel_diameter, one_circle_pulses, track_width, motor_direction ? "true" : "false");
+            break;
+            
+        default:
+            ESP_LOGW(TAG, "Unknown main_type: %d, using default configuration", main_type);
+            break;
+    }
+    
+    // Update OLED display (matching Arduino mm_settings)
+    char display_text[21];
+    snprintf(display_text, sizeof(display_text), "%s", robot_name);
+    
+    // Add module type suffix (matching Arduino logic)
+    if (module_type == 0) {
+        strncat(display_text, " Null", sizeof(display_text) - strlen(display_text) - 1);
+    } else if (module_type == 1) {
+        strncat(display_text, " Arm", sizeof(display_text) - strlen(display_text) - 1);
+    } else if (module_type == 2) {
+        strncat(display_text, " PT", sizeof(display_text) - strlen(display_text) - 1);
+    }
+    
+    // Update OLED screen line 2 (matching Arduino screenLine_2)
+    oled_controller_display_text(2, display_text);
+    ESP_LOGI(TAG, "Updated OLED display: %s", display_text);
+    
+    // Update encoder pulse rate based on current configuration
+    encoder_pulse_rate = M_PI * wheel_diameter / one_circle_pulses;
+    ESP_LOGI(TAG, "Updated encoder_pulse_rate: %.6f", encoder_pulse_rate);
     
     // Store module types in NVS
     nvs_handle_t nvs_handle;
@@ -747,148 +848,196 @@ esp_err_t motion_module_set_type(uint8_t main_type, uint8_t module_type) {
     return ESP_OK;
 }
 
-// Arduino-style motor control functions implementation
-
-static void switchPortCtrlA(float pwmInputA) {
-    int pwmIntA = round(pwmInputA * spd_rate_A);
-    if (abs(pwmIntA) < 1e-6) {
-        gpio_set_level(AIN1, 0);
-        gpio_set_level(AIN2, 0);
-        return;
+esp_err_t motion_module_get_config(double *wheel_d, int32_t *pulses, double *track_w, bool *motor_dir) {
+    if (!motion_initialized) {
+        return ESP_ERR_INVALID_STATE;
     }
+    
+    if (!wheel_d || !pulses || !track_w || !motor_dir) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    *wheel_d = wheel_diameter;
+    *pulses = one_circle_pulses;
+    *track_w = track_width;
+    *motor_dir = motor_direction;
+    
+    ESP_LOGI(TAG, "Current config: WHEEL_D=%.4f, ONE_CIRCLE_PLUSES=%" PRId32 ", TRACK_WIDTH=%.3f, SET_MOTOR_DIR=%s",
+             *wheel_d, *pulses, *track_w, *motor_dir ? "true" : "false");
+    
+    return ESP_OK;
+}
 
-    if (pwmIntA > 0) {
-        gpio_set_level(AIN1, 0);
-        gpio_set_level(AIN2, 1);
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, pwmIntA);
+esp_err_t motion_module_load_config_from_nvs(void) {
+    if (!motion_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    nvs_handle_t nvs_handle;
+    esp_err_t ret = nvs_open("motion_config", NVS_READONLY, &nvs_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to open NVS for config load: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    uint8_t main_type = 0;
+    uint8_t module_type = 0;
+    
+    ret = nvs_get_u8(nvs_handle, "main_type", &main_type);
+    if (ret == ESP_OK) {
+        ret = nvs_get_u8(nvs_handle, "module_type", &module_type);
+    }
+    
+    nvs_close(nvs_handle);
+    
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Loaded config from NVS: main_type=%d, module_type=%d", main_type, module_type);
+        // Apply the loaded configuration (this will also update OLED display)
+        return motion_module_set_type(main_type, module_type);
     } else {
-        gpio_set_level(AIN1, 1);
-        gpio_set_level(AIN2, 0);
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, -pwmIntA);
+        ESP_LOGW(TAG, "No saved configuration found, using defaults");
+        // Set default display for unknown configuration
+        oled_controller_display_text(2, "Unknown Config");
+        return ESP_OK;
     }
 }
 
-static void switchPortCtrlB(float pwmInputB) {
-    int pwmIntB = round(pwmInputB * spd_rate_B);
-    if (abs(pwmIntB) < 1e-6) {
-        gpio_set_level(BIN1, 0);
-        gpio_set_level(BIN2, 0);
-        return;
-    }
+// Motor control functions implementation
 
-    if (pwmIntB > 0) {
-        gpio_set_level(BIN1, 0);
-        gpio_set_level(BIN2, 1);
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, pwmIntB);
-    } else {
-        gpio_set_level(BIN1, 1);
-        gpio_set_level(BIN2, 0);
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, -pwmIntB);
-    }
-}
 
-static void leftCtrl(float pwmInputA) {
-    int pwmIntA = round(pwmInputA);
-    if (SET_MOTOR_DIR) {
-        if (pwmIntA < 0) {
+static void motor_left_control(float pwm_input) {
+    int pwm_int = round(pwm_input);
+    if (motor_direction) {
+        if (pwm_int < 0) {
             gpio_set_level(AIN1, 1);
             gpio_set_level(AIN2, 0);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwmIntA));
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwm_int));
         } else {
             gpio_set_level(AIN1, 0);
             gpio_set_level(AIN2, 1);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwmIntA));
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwm_int));
         }
     } else {
-        if (pwmIntA < 0) {
+        if (pwm_int < 0) {
             gpio_set_level(AIN1, 0);
             gpio_set_level(AIN2, 1);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwmIntA));
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwm_int));
         } else {
             gpio_set_level(AIN1, 1);
             gpio_set_level(AIN2, 0);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwmIntA));
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwm_int));
         }
     }
 }
 
-static void rightCtrl(float pwmInputB) {
-    int pwmIntB = round(pwmInputB);
-    if (SET_MOTOR_DIR) {
-        if (pwmIntB < 0) {
+static void motor_right_control(float pwm_input) {
+    int pwm_int = round(pwm_input);
+    if (motor_direction) {
+        if (pwm_int < 0) {
             gpio_set_level(BIN1, 1);
             gpio_set_level(BIN2, 0);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwmIntB));
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwm_int));
         } else {
             gpio_set_level(BIN1, 0);
             gpio_set_level(BIN2, 1);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwmIntB));
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwm_int));
         }
     } else {
-        if (pwmIntB < 0) {
+        if (pwm_int < 0) {
             gpio_set_level(BIN1, 0);
             gpio_set_level(BIN2, 1);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwmIntB));
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwm_int));
         } else {
             gpio_set_level(BIN1, 1);
             gpio_set_level(BIN2, 0);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwmIntB));
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwm_int));
         }
     }
 }
 
-static void getLeftSpeed(void) {
-    uint64_t currentTime = esp_timer_get_time();
-    long encoderPulsesA = current_encoder_data.left_count;
+static void calculate_left_wheel_speed(void) {
+    uint64_t current_time = esp_timer_get_time();
+    int32_t encoder_pulses = current_encoder_data.left_count;
     
-    if (!SET_MOTOR_DIR) {
-        speedGetA = (plusesRate * (encoderPulsesA - lastEncoderA)) / ((double)(currentTime - lastLeftSpdTime) / 1000000);
-    } else {
-        speedGetA = (plusesRate * (lastEncoderA - encoderPulsesA)) / ((double)(currentTime - lastLeftSpdTime) / 1000000);
+    if (last_left_speed_time > 0) {
+        double dt = (double)(current_time - last_left_speed_time) / 1000000.0; // Convert to seconds
+        
+        if (dt > 0.001) { // Minimum 1ms time difference
+            if (!motor_direction) {
+                left_wheel_speed = (encoder_pulse_rate * (encoder_pulses - last_left_encoder_count)) / dt;
+            } else {
+                left_wheel_speed = (encoder_pulse_rate * (last_left_encoder_count - encoder_pulses)) / dt;
+            }
+        }
     }
-    lastEncoderA = encoderPulsesA;
-    lastLeftSpdTime = currentTime;
+    
+    last_left_encoder_count = encoder_pulses;
+    last_left_speed_time = current_time;
 }
 
-static void getRightSpeed(void) {
-    uint64_t currentTime = esp_timer_get_time();
-    long encoderPulsesB = current_encoder_data.right_count;
+static void calculate_right_wheel_speed(void) {
+    uint64_t current_time = esp_timer_get_time();
+    int32_t encoder_pulses = current_encoder_data.right_count;
     
-    if (!SET_MOTOR_DIR) {
-        speedGetB = (plusesRate * (encoderPulsesB - lastEncoderB)) / ((double)(currentTime - lastRightSpdTime) / 1000000);
-    } else {
-        speedGetB = (plusesRate * (lastEncoderB - encoderPulsesB)) / ((double)(currentTime - lastRightSpdTime) / 1000000);
+    if (last_right_speed_time > 0) {
+        double dt = (double)(current_time - last_right_speed_time) / 1000000.0; // Convert to seconds
+        
+        if (dt > 0.001) { // Minimum 1ms time difference
+            if (!motor_direction) {
+                right_wheel_speed = (encoder_pulse_rate * (encoder_pulses - last_right_encoder_count)) / dt;
+            } else {
+                right_wheel_speed = (encoder_pulse_rate * (last_right_encoder_count - encoder_pulses)) / dt;
+            }
+        }
     }
-    lastEncoderB = encoderPulsesB;
-    lastRightSpdTime = currentTime;
+    
+    last_right_encoder_count = encoder_pulses;
+    last_right_speed_time = current_time;
 }
 
-static void LeftPidControllerCompute(void) {
-    if (!usePIDCompute) {
+static void compute_left_pid_controller(void) {
+    if (!pid_compute_enabled) {
         return;
     }
 
-    outputA = compute_pid(&left_pid_controller, setpointA, speedGetA);
-    if (abs(outputA) < PID_THRESHOLD_PWM) {
-        outputA = 0;
+    left_pid_output = compute_pid(&left_pid_controller, left_setpoint, left_wheel_speed);
+    if (abs(left_pid_output) < PID_THRESHOLD_PWM) {
+        left_pid_output = 0;
     }
-    if (setpointA == 0 && speedGetA == 0) {
-        outputA = 0;
+    if (left_setpoint == 0 && left_wheel_speed == 0) {
+        left_pid_output = 0;
     }
-    leftCtrl(outputA);
+    motor_left_control(left_pid_output);
 }
 
-static void RightPidControllerCompute(void) {
-    if (!usePIDCompute) {
+static void compute_right_pid_controller(void) {
+    if (!pid_compute_enabled) {
         return;
     }
 
-    outputB = compute_pid(&right_pid_controller, setpointB, speedGetB);
-    if (abs(outputB) < PID_THRESHOLD_PWM) {
-        outputB = 0;
+    right_pid_output = compute_pid(&right_pid_controller, right_setpoint, right_wheel_speed);
+    if (abs(right_pid_output) < PID_THRESHOLD_PWM) {
+        right_pid_output = 0;
     }
-    if (setpointB == 0 && speedGetB == 0) {
-        outputB = 0;
+    if (right_setpoint == 0 && right_wheel_speed == 0) {
+        right_pid_output = 0;
     }
-    rightCtrl(outputB);
+    motor_right_control(right_pid_output);
+}
+
+// Public functions for main loop integration
+void motion_module_get_left_speed(void) {
+    calculate_left_wheel_speed();
+}
+
+void motion_module_get_right_speed(void) {
+    calculate_right_wheel_speed();
+}
+
+void motion_module_left_pid_compute(void) {
+    compute_left_pid_controller();
+}
+
+void motion_module_right_pid_compute(void) {
+    compute_right_pid_controller();
 }

@@ -240,6 +240,22 @@ bool led_controller_is_on(void);
  */
 esp_err_t led_controller_get_state(led_state_t *state);
 
+// Arduino compatibility functions
+
+/**
+ * @brief Initialize LED pins (Arduino compatible)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t led_pin_init(void);
+
+/**
+ * @brief Control LED PWM (Arduino compatible)
+ * @param io4_input IO4 pin PWM value (0-255)
+ * @param io5_input IO5 pin PWM value (0-255)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t led_pwm_ctrl(int io4_input, int io5_input);
+
 // System LED functions
 
 /**
@@ -344,6 +360,14 @@ esp_err_t led_controller_load_config(void);
  * @return ESP_OK on success, error code otherwise
  */
 esp_err_t led_controller_reset_config(void);
+
+// Arduino compatibility constants
+#define IO4_PIN 4
+#define IO5_PIN 5
+#define ANALOG_WRITE_BITS 8
+#define MAX_PWM (pow(2, ANALOG_WRITE_BITS)-1)
+#define MIN_PWM (MAX_PWM/4)
+#define FREQ 200
 
 // Default configuration values
 #define DEFAULT_LED_PIN                    LED_PIN

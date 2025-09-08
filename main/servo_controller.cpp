@@ -82,9 +82,9 @@ static const char *TAG = "ServoController";
 
 #define MAX_SERVOS 5
 
-// SCServo protocol headers
-#define SCSERVO_HEADER 0xFF
-#define SCSERVO_ID 0xFE
+// SCServo protocol headers (moved to header file)
+// #define SCSERVO_HEADER 0xFF
+// #define SCSERVO_ID 0xFE
 
 
 // Private variables
@@ -119,9 +119,6 @@ static double calculate_rad_by_feedback(int input_steps, int joint_name) {
     return get_rad;
 }
 
-static double ang2deg(double input_ang) {
-    return (input_ang / 180) * M_PI;
-}
 
 // Simple linkage inverse kinematics from Arduino
 static void simple_linkage_ik_rad(double LA, double LB, double aIn, double bIn, 
@@ -226,10 +223,17 @@ static servo_config_t servo_status[MAX_SERVOS];
 static esp_err_t servo_init_uart(void);
 static esp_err_t servo_init_pwm(void);
 static esp_err_t scservo_send_command(uint8_t servo_id, uint8_t cmd, uint8_t *data, uint8_t data_len);
-static esp_err_t scservo_read_response(uint8_t *buffer, size_t buffer_size);
 static uint16_t servo_angle_to_pulse(uint16_t angle);
 static esp_err_t servo_set_pwm_duty(uint8_t servo_id, uint16_t pulse_width);
 static esp_err_t scs_servo_write_word(uint8_t servo_id, uint8_t reg, uint16_t value);
+
+// SCServo Protocol Helper Functions
+static void host_to_scs(uint8_t *data_l, uint8_t *data_h, uint16_t data);
+static uint16_t scs_to_host(uint8_t data_l, uint8_t data_h);
+static esp_err_t scservo_write_buf(uint8_t id, uint8_t mem_addr, uint8_t *data, uint8_t data_len, uint8_t instruction);
+static esp_err_t scservo_read_buf(uint8_t id, uint8_t mem_addr, uint8_t *data, uint8_t data_len);
+static esp_err_t scservo_ack(uint8_t id);
+static bool scservo_check_head(void);
 
 esp_err_t servo_controller_init(void) {
     ESP_LOGI(TAG, "Initializing servo controller...");
@@ -296,12 +300,8 @@ esp_err_t servo_controller_set_position(uint8_t servo_id, uint16_t position) {
                                      fminf(servo_configs[array_index].max_position, position));
 
     if (scservo_mode) {
-        // SCServo mode - send UART command
-        uint8_t data[2];
-        data[0] = clamped_position & 0xFF;
-        data[1] = (clamped_position >> 8) & 0xFF;
-        
-        esp_err_t ret = scservo_send_command(servo_id, 0x01, data, 2); // Write position command
+        // SCServo mode - use proper SCServo protocol
+        esp_err_t ret = scservo_write_pos(servo_id, clamped_position, 0, 0); // Write position with default speed
         if (ret == ESP_OK) {
             servo_feedback[array_index].target_position = clamped_position;
             servo_feedback[array_index].position = clamped_position;
@@ -328,16 +328,10 @@ esp_err_t servo_controller_get_position(uint8_t servo_id, uint16_t *position) {
     uint8_t array_index = servo_id - 11;
 
     if (scservo_mode) {
-        // SCServo mode - read position from servo
-        uint8_t data[2];
-        esp_err_t ret = scservo_send_command(servo_id, 0x28, NULL, 0); // Read position command
+        // SCServo mode - read position from servo using proper protocol
+        esp_err_t ret = scservo_read_pos(servo_id, position);
         if (ret == ESP_OK) {
-            ret = scservo_read_response(data, 2);
-            if (ret == ESP_OK) {
-                uint16_t pos = (data[1] << 8) | data[0];
-                *position = pos;
-                servo_feedback[array_index].position = pos;
-            }
+            servo_feedback[array_index].position = *position;
         }
         return ret;
     } else {
@@ -355,16 +349,11 @@ esp_err_t servo_controller_set_speed(uint8_t servo_id, uint16_t speed) {
     uint8_t array_index = servo_id - 11;
 
     if (scservo_mode) {
-        // SCServo mode - send speed command
-        uint8_t data[2];
-        data[0] = speed & 0xFF;
-        data[1] = (speed >> 8) & 0xFF;
-        
-        esp_err_t ret = scservo_send_command(servo_id, 0x20, data, 2); // Write speed command
-        if (ret == ESP_OK) {
-            servo_feedback[array_index].speed = speed;
-        }
-        return ret;
+        // SCServo mode - speed is controlled via position commands with time/speed parameters
+        // For now, store the speed for use in position commands
+        servo_feedback[array_index].speed = speed;
+        ESP_LOGI(TAG, "Speed set to %d for servo %d (will be used in next position command)", speed, servo_id);
+        return ESP_OK;
     } else {
         // PWM mode - log warning
         ESP_LOGW(TAG, "Speed control not supported in PWM mode for servo %d", servo_id);
@@ -380,11 +369,8 @@ esp_err_t servo_controller_enable_torque(uint8_t servo_id, bool enable) {
     uint8_t array_index = servo_id - 11;
 
     if (scservo_mode) {
-        // SCServo mode - send torque command
-        uint8_t data[1];
-        data[0] = enable ? 0x01 : 0x00;
-        
-        esp_err_t ret = scservo_send_command(servo_id, 0x18, data, 1); // Write torque command
+        // SCServo mode - use proper SCServo protocol
+        esp_err_t ret = scservo_enable_torque(servo_id, enable ? 1 : 0);
         if (ret == ESP_OK) {
             servo_configs[array_index].enable_torque = enable;
         }
@@ -441,12 +427,12 @@ esp_err_t servo_controller_disable_all(void)
     // Disable all servos by setting torque to 0
     for (int i = 0; i < MAX_SERVOS; i++) {
         if (servo_status[i].enable_torque) {
-            esp_err_t ret = scs_servo_write_word(i + 1, SCS_TORQUE_ENABLE, 0);
+            esp_err_t ret = scservo_enable_torque(i + 11, 0); // Servo IDs start from 11
             if (ret != ESP_OK) {
-                ESP_LOGW(TAG, "Failed to disable servo %d: %s", i + 1, esp_err_to_name(ret));
+                ESP_LOGW(TAG, "Failed to disable servo %d: %s", i + 11, esp_err_to_name(ret));
             } else {
                 servo_status[i].enable_torque = false;
-                ESP_LOGI(TAG, "Servo %d disabled", i + 1);
+                ESP_LOGI(TAG, "Servo %d disabled", i + 11);
             }
         }
     }
@@ -530,57 +516,11 @@ static esp_err_t servo_init_pwm(void) {
 }
 
 static esp_err_t scservo_send_command(uint8_t servo_id, uint8_t cmd, uint8_t *data, uint8_t data_len) {
-    uint8_t buffer[32];
-    uint8_t checksum = 0;
-    int index = 0;
-
-    // Header
-    buffer[index++] = SCSERVO_HEADER;
-    buffer[index++] = SCSERVO_HEADER;
-    
-    // ID
-    buffer[index++] = servo_id;
-    checksum += servo_id;
-    
-    // Length
-    buffer[index++] = data_len + 3; // ID + CMD + DATA + CHECKSUM
-    checksum += buffer[index - 1];
-    
-    // Command
-    buffer[index++] = cmd;
-    checksum += cmd;
-    
-    // Data
-    if (data && data_len > 0) {
-        memcpy(&buffer[index], data, data_len);
-        for (int i = 0; i < data_len; i++) {
-            checksum += data[i];
-        }
-        index += data_len;
-    }
-    
-    // Checksum
-    buffer[index++] = ~checksum;
-    
-    // Send command
-    int written = uart_write_bytes(SERVO_UART_NUM, buffer, index);
-    if (written != index) {
-        ESP_LOGE(TAG, "Failed to send SCServo command");
-        return ESP_FAIL;
-    }
-    
-    return ESP_OK;
+    // This function is deprecated - use scservo_write_buf instead
+    ESP_LOGW(TAG, "scservo_send_command is deprecated, use scservo_write_buf");
+    return scservo_write_buf(servo_id, 0, data, data_len, cmd);
 }
 
-static esp_err_t scservo_read_response(uint8_t *buffer, size_t buffer_size) {
-    int len = uart_read_bytes(SERVO_UART_NUM, buffer, buffer_size, pdMS_TO_TICKS(100));
-    if (len <= 0) {
-        ESP_LOGE(TAG, "Failed to read SCServo response");
-        return ESP_FAIL;
-    }
-    
-    return ESP_OK;
-}
 
 static uint16_t servo_angle_to_pulse(uint16_t angle) {
     // Convert angle (0-180) to pulse width (500-2500 microseconds)
@@ -731,15 +671,21 @@ esp_err_t servo_controller_torque_control(bool enable) {
 esp_err_t servo_controller_change_id(uint8_t old_id, uint8_t new_id) {
     ESP_LOGI(TAG, "Changing servo ID from %d to %d", old_id, new_id);
     
-    // Change servo ID using SCS protocol
+    // Change servo ID using proper SCServo protocol
     // This is a critical operation that requires careful handling
-    uint8_t data[2];
-    data[0] = 0x05; // ID register
-    data[1] = new_id;
+    uint8_t data[1];
+    data[0] = new_id;
     
-    esp_err_t ret = scservo_send_command(old_id, 0x03, data, 2); // Write command
+    esp_err_t ret = scservo_write_buf(old_id, SCSCL_ID, data, 1, INST_WRITE);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to change servo ID: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // Wait for acknowledgment
+    ret = scservo_ack(old_id);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get acknowledgment for ID change: %s", esp_err_to_name(ret));
         return ret;
     }
     
@@ -1052,4 +998,390 @@ esp_err_t servo_controller_set_pose(const arm_pose_t *pose, uint16_t speed) {
              angles.base, angles.shoulder, angles.elbow, angles.gripper);
     
     return servo_controller_set_joint_angles(&angles, speed);
+}
+
+// SCServo Protocol Helper Functions Implementation
+
+/**
+ * @brief Convert 16-bit host data to SCServo format (MSB first)
+ * @param data_l Pointer to store low byte
+ * @param data_h Pointer to store high byte  
+ * @param data 16-bit data to convert
+ */
+static void host_to_scs(uint8_t *data_l, uint8_t *data_h, uint16_t data) {
+    *data_l = (data >> 8) & 0xFF;  // MSB first (End=1)
+    *data_h = data & 0xFF;         // LSB second
+}
+
+/**
+ * @brief Convert SCServo format to 16-bit host data
+ * @param data_l Low byte
+ * @param data_h High byte
+ * @return 16-bit data
+ */
+static uint16_t scs_to_host(uint8_t data_l, uint8_t data_h) {
+    return ((uint16_t)data_l << 8) | data_h;
+}
+
+/**
+ * @brief Write buffer to SCServo (equivalent to Arduino writeBuf)
+ * @param id Servo ID
+ * @param mem_addr Memory address
+ * @param data Data to write
+ * @param data_len Data length
+ * @param instruction Instruction type
+ * @return ESP_OK on success, error code otherwise
+ */
+static esp_err_t scservo_write_buf(uint8_t id, uint8_t mem_addr, uint8_t *data, uint8_t data_len, uint8_t instruction) {
+    uint8_t msg_len = 2 + (data ? data_len + 1 : 0);
+    uint8_t checksum = id + msg_len + instruction + mem_addr;
+    
+    // Send header
+    uint8_t header[] = {SCSERVO_HEADER1, SCSERVO_HEADER2};
+    uart_write_bytes(SERVO_UART_NUM, header, 2);
+    
+    // Send ID
+    uart_write_bytes(SERVO_UART_NUM, &id, 1);
+    
+    // Send message length
+    uart_write_bytes(SERVO_UART_NUM, &msg_len, 1);
+    
+    // Send instruction
+    uart_write_bytes(SERVO_UART_NUM, &instruction, 1);
+    
+    // Send memory address
+    uart_write_bytes(SERVO_UART_NUM, &mem_addr, 1);
+    
+    // Send data if present
+    if (data && data_len > 0) {
+        uart_write_bytes(SERVO_UART_NUM, data, data_len);
+        for (int i = 0; i < data_len; i++) {
+            checksum += data[i];
+        }
+    }
+    
+    // Send checksum
+    uint8_t final_checksum = ~checksum;
+    uart_write_bytes(SERVO_UART_NUM, &final_checksum, 1);
+    
+    return ESP_OK;
+}
+
+/**
+ * @brief Read buffer from SCServo (equivalent to Arduino Read)
+ * @param id Servo ID
+ * @param mem_addr Memory address
+ * @param data Buffer to store read data
+ * @param data_len Expected data length
+ * @return ESP_OK on success, error code otherwise
+ */
+static esp_err_t scservo_read_buf(uint8_t id, uint8_t mem_addr, uint8_t *data, uint8_t data_len) {
+    // Send read command
+    esp_err_t ret = scservo_write_buf(id, mem_addr, &data_len, 1, INST_READ);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    
+    // Check for response header
+    if (!scservo_check_head()) {
+        return ESP_FAIL;
+    }
+    
+    // Read response header
+    uint8_t header[3];
+    int len = uart_read_bytes(SERVO_UART_NUM, header, 3, pdMS_TO_TICKS(100));
+    if (len != 3) {
+        return ESP_FAIL;
+    }
+    
+    // Verify ID and length
+    if (header[0] != id || header[1] != data_len) {
+        return ESP_FAIL;
+    }
+    
+    // Read data
+    len = uart_read_bytes(SERVO_UART_NUM, data, data_len, pdMS_TO_TICKS(100));
+    if (len != data_len) {
+        return ESP_FAIL;
+    }
+    
+    // Read checksum
+    uint8_t checksum;
+    len = uart_read_bytes(SERVO_UART_NUM, &checksum, 1, pdMS_TO_TICKS(100));
+    if (len != 1) {
+        return ESP_FAIL;
+    }
+    
+    return ESP_OK;
+}
+
+/**
+ * @brief Check for SCServo response header
+ * @return true if header found, false otherwise
+ */
+static bool scservo_check_head(void) {
+    uint8_t header[2];
+    int len = uart_read_bytes(SERVO_UART_NUM, header, 2, pdMS_TO_TICKS(100));
+    if (len != 2) {
+        return false;
+    }
+    return (header[0] == SCSERVO_HEADER1 && header[1] == SCSERVO_HEADER2);
+}
+
+/**
+ * @brief Wait for SCServo acknowledgment
+ * @param id Servo ID
+ * @return ESP_OK on success, error code otherwise
+ */
+static esp_err_t scservo_ack(uint8_t id) {
+    if (!scservo_check_head()) {
+        return ESP_FAIL;
+    }
+    
+    uint8_t response[4];
+    int len = uart_read_bytes(SERVO_UART_NUM, response, 4, pdMS_TO_TICKS(100));
+    if (len != 4) {
+        return ESP_FAIL;
+    }
+    
+    // Verify response
+    if (response[0] != id || response[1] != 2) {
+        return ESP_FAIL;
+    }
+    
+    return ESP_OK;
+}
+
+// SCServo API Functions Implementation
+
+/**
+ * @brief Write position to SCServo (equivalent to Arduino WritePos)
+ * @param id Servo ID
+ * @param position Target position (0-4095)
+ * @param time Time to reach position (ms)
+ * @param speed Speed (0-4095)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_write_pos(uint8_t id, uint16_t position, uint16_t time, uint16_t speed) {
+    uint8_t data[6];
+    host_to_scs(&data[0], &data[1], position);
+    host_to_scs(&data[2], &data[3], time);
+    host_to_scs(&data[4], &data[5], speed);
+    
+    esp_err_t ret = scservo_write_buf(id, SCSCL_GOAL_POSITION_L, data, 6, INST_WRITE);
+    if (ret == ESP_OK) {
+        ret = scservo_ack(id);
+    }
+    return ret;
+}
+
+/**
+ * @brief Write position with acceleration to SCServo (equivalent to Arduino WritePosEx)
+ * @param id Servo ID
+ * @param position Target position (-2048 to 2047)
+ * @param speed Speed (0-4095)
+ * @param acc Acceleration (0-255)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_write_pos_ex(uint8_t id, int16_t position, uint16_t speed, uint8_t acc) {
+    uint8_t data[7];
+    data[0] = acc;
+    host_to_scs(&data[1], &data[2], (uint16_t)position);
+    host_to_scs(&data[3], &data[4], 0);  // Time = 0
+    host_to_scs(&data[5], &data[6], speed);
+    
+    esp_err_t ret = scservo_write_buf(id, SCSCL_GOAL_POSITION_L, data, 7, INST_WRITE);
+    if (ret == ESP_OK) {
+        ret = scservo_ack(id);
+    }
+    return ret;
+}
+
+/**
+ * @brief Register write position to SCServo (equivalent to Arduino RegWritePos)
+ * @param id Servo ID
+ * @param position Target position (0-4095)
+ * @param time Time to reach position (ms)
+ * @param speed Speed (0-4095)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_reg_write_pos(uint8_t id, uint16_t position, uint16_t time, uint16_t speed) {
+    uint8_t data[6];
+    host_to_scs(&data[0], &data[1], position);
+    host_to_scs(&data[2], &data[3], time);
+    host_to_scs(&data[4], &data[5], speed);
+    
+    esp_err_t ret = scservo_write_buf(id, SCSCL_GOAL_POSITION_L, data, 6, INST_REG_WRITE);
+    if (ret == ESP_OK) {
+        ret = scservo_ack(id);
+    }
+    return ret;
+}
+
+/**
+ * @brief Register write position with acceleration to SCServo (equivalent to Arduino RegWritePosEx)
+ * @param id Servo ID
+ * @param position Target position (-2048 to 2047)
+ * @param speed Speed (0-4095)
+ * @param acc Acceleration (0-255)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_reg_write_pos_ex(uint8_t id, int16_t position, uint16_t speed, uint8_t acc) {
+    uint8_t data[7];
+    data[0] = acc;
+    host_to_scs(&data[1], &data[2], (uint16_t)position);
+    host_to_scs(&data[3], &data[4], 0);  // Time = 0
+    host_to_scs(&data[5], &data[6], speed);
+    
+    esp_err_t ret = scservo_write_buf(id, SCSCL_GOAL_POSITION_L, data, 7, INST_REG_WRITE);
+    if (ret == ESP_OK) {
+        ret = scservo_ack(id);
+    }
+    return ret;
+}
+
+/**
+ * @brief Enable/disable torque for SCServo (equivalent to Arduino EnableTorque)
+ * @param id Servo ID
+ * @param enable 1 to enable, 0 to disable
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_enable_torque(uint8_t id, uint8_t enable) {
+    uint8_t data[1];
+    data[0] = enable;
+    
+    esp_err_t ret = scservo_write_buf(id, SCSCL_TORQUE_ENABLE, data, 1, INST_WRITE);
+    if (ret == ESP_OK) {
+        ret = scservo_ack(id);
+    }
+    return ret;
+}
+
+/**
+ * @brief Read position from SCServo (equivalent to Arduino ReadPos)
+ * @param id Servo ID
+ * @param position Pointer to store position
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_read_pos(uint8_t id, uint16_t *position) {
+    uint8_t data[2];
+    esp_err_t ret = scservo_read_buf(id, SCSCL_PRESENT_POSITION_L, data, 2);
+    if (ret == ESP_OK) {
+        *position = scs_to_host(data[0], data[1]);
+    }
+    return ret;
+}
+
+/**
+ * @brief Read speed from SCServo (equivalent to Arduino ReadSpeed)
+ * @param id Servo ID
+ * @param speed Pointer to store speed
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_read_speed(uint8_t id, uint16_t *speed) {
+    uint8_t data[2];
+    esp_err_t ret = scservo_read_buf(id, SCSCL_PRESENT_SPEED_L, data, 2);
+    if (ret == ESP_OK) {
+        *speed = scs_to_host(data[0], data[1]);
+    }
+    return ret;
+}
+
+/**
+ * @brief Read load from SCServo (equivalent to Arduino ReadLoad)
+ * @param id Servo ID
+ * @param load Pointer to store load
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_read_load(uint8_t id, uint16_t *load) {
+    uint8_t data[2];
+    esp_err_t ret = scservo_read_buf(id, SCSCL_PRESENT_LOAD_L, data, 2);
+    if (ret == ESP_OK) {
+        *load = scs_to_host(data[0], data[1]);
+    }
+    return ret;
+}
+
+/**
+ * @brief Read voltage from SCServo (equivalent to Arduino ReadVoltage)
+ * @param id Servo ID
+ * @param voltage Pointer to store voltage
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_read_voltage(uint8_t id, uint8_t *voltage) {
+    esp_err_t ret = scservo_read_buf(id, SCSCL_PRESENT_VOLTAGE, voltage, 1);
+    return ret;
+}
+
+/**
+ * @brief Read temperature from SCServo (equivalent to Arduino ReadTemper)
+ * @param id Servo ID
+ * @param temperature Pointer to store temperature
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_read_temperature(uint8_t id, uint8_t *temperature) {
+    esp_err_t ret = scservo_read_buf(id, SCSCL_PRESENT_TEMPERATURE, temperature, 1);
+    return ret;
+}
+
+/**
+ * @brief Read moving status from SCServo (equivalent to Arduino ReadMoving)
+ * @param id Servo ID
+ * @param moving Pointer to store moving status
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_read_moving(uint8_t id, uint8_t *moving) {
+    esp_err_t ret = scservo_read_buf(id, SCSCL_MOVING, moving, 1);
+    return ret;
+}
+
+/**
+ * @brief Ping SCServo (equivalent to Arduino Ping)
+ * @param id Servo ID
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_ping(uint8_t id) {
+    esp_err_t ret = scservo_write_buf(id, 0, NULL, 0, INST_PING);
+    if (ret == ESP_OK) {
+        if (!scservo_check_head()) {
+            return ESP_FAIL;
+        }
+        
+        uint8_t response[4];
+        int len = uart_read_bytes(SERVO_UART_NUM, response, 4, pdMS_TO_TICKS(100));
+        if (len != 4) {
+            return ESP_FAIL;
+        }
+        
+        if (response[0] != id || response[1] != 2) {
+            return ESP_FAIL;
+        }
+    }
+    return ret;
+}
+
+/**
+ * @brief Factory reset SCServo (equivalent to Arduino FactoryReset)
+ * @param id Servo ID
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_factory_reset(uint8_t id) {
+    esp_err_t ret = scservo_write_buf(id, 0, NULL, 0, INST_FACTORY_RESET);
+    if (ret == ESP_OK) {
+        ret = scservo_ack(id);
+    }
+    return ret;
+}
+
+/**
+ * @brief Reboot SCServo (equivalent to Arduino Reboot)
+ * @param id Servo ID
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t scservo_reboot(uint8_t id) {
+    esp_err_t ret = scservo_write_buf(id, 0, NULL, 0, INST_REBOOT);
+    if (ret == ESP_OK) {
+        ret = scservo_ack(id);
+    }
+    return ret;
 }

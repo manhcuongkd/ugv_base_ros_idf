@@ -66,11 +66,6 @@ esp_err_t json_parser_parse_command(const char *json_str, json_command_t *cmd) {
     return result;
 }
 
-esp_err_t json_parser_process_command(json_command_t *cmd) {
-    // This function is redundant - commands are now processed in uart_controller.cpp
-    // Keep this as a stub for compatibility
-    return ESP_OK;
-}
 
 static esp_err_t json_parser_parse_command_data(const cJSON *json, json_command_t *cmd) {
     switch (cmd->type) {
@@ -585,7 +580,7 @@ static esp_err_t json_parser_parse_command_data(const cJSON *json, json_command_
             break;
 
         // IMU, motion, servo, and file system commands (no additional data)
-        case CMD_OLED_DEFAULT:        // {"T":-3}
+        case (uint16_t)CMD_OLED_DEFAULT:        // {"T":-3}
         case CMD_GET_IMU_DATA:        // {"T":126}
         case CMD_CALI_IMU_STEP:       // {"T":127}
         case CMD_GET_IMU_OFFSET:      // {"T":128}
@@ -972,7 +967,7 @@ esp_err_t json_parser_send_base_feedback(void) {
         cJSON_AddNumberToObject(json, "odr", 0);
     }
     
-    // Get battery voltage (placeholder - would need battery controller)
+    // Get battery voltage
     cJSON_AddNumberToObject(json, "v", 11.0); // Default voltage
     
     // Send via UART

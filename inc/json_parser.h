@@ -806,7 +806,6 @@ typedef struct {
 
 // Function declarations
 esp_err_t json_parser_init(void);
-esp_err_t json_parser_process_command(json_command_t *cmd);
 esp_err_t json_parser_parse_command(const char *json_str, json_command_t *cmd);
 esp_err_t json_parser_send_feedback(const json_feedback_t *feedback);
 esp_err_t json_parser_send_base_feedback(void);

@@ -751,16 +751,14 @@ static esp_err_t gimbal_set_tilt_angle(float angle)
 
 static uint16_t gimbal_angle_to_pulse(float angle, uint8_t axis)
 {
-    uint16_t min_pulse, max_pulse, center;
+    uint16_t min_pulse, max_pulse;
     
     if (axis == 0) { // Pan axis
         min_pulse = GIMBAL_PAN_MIN;
         max_pulse = GIMBAL_PAN_MAX;
-        center = GIMBAL_PAN_CENTER;
     } else { // Tilt axis
         min_pulse = GIMBAL_TILT_MIN;
         max_pulse = GIMBAL_TILT_MAX;
-        center = GIMBAL_TILT_CENTER;
     }
 
     // Convert angle to pulse width
@@ -890,5 +888,155 @@ esp_err_t gimbal_controller_stabilize(const imu_data_t *imu_data)
         }
     }
 
+    return ESP_OK;
+}
+
+esp_err_t gimbal_controller_get_feedback(gimbal_feedback_t *pan_fb, gimbal_feedback_t *tilt_fb)
+{
+    if (!gimbal_initialized) {
+        ESP_LOGE(TAG, "Gimbal controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (pan_fb == NULL || tilt_fb == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // TODO: Implement real servo feedback reading via UART
+    // For now, return simulated feedback based on current positions
+    pan_fb->status = true;
+    pan_fb->pos = gimbal_control.pan_position;
+    pan_fb->speed = 0;
+    pan_fb->load = 0;
+    pan_fb->voltage = 12.0f;
+    pan_fb->current = 0.5f;
+    pan_fb->temper = 25.0f;
+    pan_fb->mode = 0;
+
+    tilt_fb->status = true;
+    tilt_fb->pos = gimbal_control.tilt_position;
+    tilt_fb->speed = 0;
+    tilt_fb->load = 0;
+    tilt_fb->voltage = 12.0f;
+    tilt_fb->current = 0.5f;
+    tilt_fb->temper = 25.0f;
+    tilt_fb->mode = 0;
+
+    ESP_LOGD(TAG, "Servo feedback: pan_pos=%d, tilt_pos=%d", pan_fb->pos, tilt_fb->pos);
+    return ESP_OK;
+}
+
+esp_err_t gimbal_controller_set_torque(uint8_t servo_id, bool enable)
+{
+    if (!gimbal_initialized) {
+        ESP_LOGE(TAG, "Gimbal controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (servo_id != GIMBAL_PAN_ID && servo_id != GIMBAL_TILT_ID) {
+        ESP_LOGE(TAG, "Invalid servo ID: %d", servo_id);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // TODO: Implement real servo torque control via UART
+    // For now, just log the command
+    ESP_LOGI(TAG, "Servo %d torque %s", servo_id, enable ? "enabled" : "disabled");
+    
+    // Simulate servo stop delay
+    if (!enable) {
+        vTaskDelay(pdMS_TO_TICKS(SERVO_STOP_DELAY));
+    }
+    
+    return ESP_OK;
+}
+
+esp_err_t gimbal_controller_user_control(int8_t input_x, int8_t input_y, uint16_t speed)
+{
+    if (!gimbal_initialized) {
+        ESP_LOGE(TAG, "Gimbal controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Validate input parameters
+    if (input_x < -1 || input_x > 2 || input_y < -1 || input_y > 2) {
+        ESP_LOGE(TAG, "Invalid input parameters: x=%d, y=%d", input_x, input_y);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    static float goal_x = 0.0f;
+    static float goal_y = 0.0f;
+
+    // 8-directional control logic (matching Arduino implementation)
+    if (input_x == -1 && input_y == 1) {
+        goal_x = -180.0f;
+        goal_y = 90.0f;
+    }
+    else if (input_x == 0 && input_y == 1) {
+        goal_y = 90.0f;
+    }
+    else if (input_x == 1 && input_y == 1) {
+        goal_x = 180.0f;
+        goal_y = 90.0f;
+    }
+    else if (input_x == -1 && input_y == 0) {
+        goal_x = -180.0f;
+    }
+    else if (input_x == 1 && input_y == 0) {
+        goal_x = 180.0f;
+    }
+    else if (input_x == -1 && input_y == -1) {
+        goal_x = -180.0f;
+        goal_y = -45.0f;
+    }
+    else if (input_x == 0 && input_y == -1) {
+        goal_y = -45.0f;
+    }
+    else if (input_x == 1 && input_y == -1) {
+        goal_x = 180.0f;
+        goal_y = -45.0f;
+    }
+
+    // Center position command
+    if (input_x == 2 && input_y == 2) {
+        return gimbal_controller_center();
+    }
+    else {
+        // Move to calculated goal position
+        esp_err_t ret = gimbal_controller_set_pan_tilt(goal_x, goal_y);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set gimbal position: %s", esp_err_to_name(ret));
+            return ret;
+        }
+
+        // Handle center position for individual axes (matching Arduino logic)
+        if (input_x == 0) {
+            // Disable pan torque temporarily to read current position
+            gimbal_controller_set_torque(GIMBAL_PAN_ID, false);
+            vTaskDelay(pdMS_TO_TICKS(5));
+            gimbal_controller_set_torque(GIMBAL_PAN_ID, true);
+            
+            // Read current pan position and update goal
+            gimbal_feedback_t pan_fb, tilt_fb;
+            if (gimbal_controller_get_feedback(&pan_fb, &tilt_fb) == ESP_OK) {
+                goal_x = gimbal_controller_pulse_to_degrees(pan_fb.pos, 0);
+            }
+        }
+        
+        if (input_y == 0) {
+            // Disable tilt torque temporarily to read current position
+            gimbal_controller_set_torque(GIMBAL_TILT_ID, false);
+            vTaskDelay(pdMS_TO_TICKS(5));
+            gimbal_controller_set_torque(GIMBAL_TILT_ID, true);
+            
+            // Read current tilt position and update goal
+            gimbal_feedback_t pan_fb, tilt_fb;
+            if (gimbal_controller_get_feedback(&pan_fb, &tilt_fb) == ESP_OK) {
+                goal_y = gimbal_controller_pulse_to_degrees(tilt_fb.pos, 1);
+            }
+        }
+    }
+
+    ESP_LOGI(TAG, "User control: input_x=%d, input_y=%d, goal_x=%.1f, goal_y=%.1f", 
+             input_x, input_y, goal_x, goal_y);
     return ESP_OK;
 }
