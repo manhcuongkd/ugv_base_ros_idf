@@ -1385,3 +1385,4 @@ esp_err_t scservo_reboot(uint8_t id) {
     }
     return ret;
 }
+

@@ -17,6 +17,7 @@
 #include "../inc/motion_module.h"
 #include "../inc/imu_controller.h"
 #include "../inc/servo_controller.h"
+#include "../inc/gimbal_controller.h"
 #include "../inc/oled_controller.h"
 #include "../inc/battery_controller.h"
 #include "../inc/led_controller.h"
@@ -72,14 +73,11 @@ esp_err_t system_manager_init(void)
     
     // Create boot mission only if file system is available (matching Arduino implementation)
     if (files_result == ESP_OK) {
-        ESP_LOGI(TAG, "Creating boot mission...");
-        create_mission("boot", "these cmds run automatically at boot.");
-        
-        // Save main type and module type to boot mission
-        save_main_type_module_type(1, 2); // RaspRover, Gimbal
-        
-        // Play boot mission once
-        mission_play("boot", 1);
+        ESP_LOGI(TAG, "SPIFFS available - boot mission creation deferred to reduce stack usage");
+        // TODO: Move boot mission creation to a separate task to reduce stack pressure
+        // create_mission("boot", "these cmds run automatically at boot.");
+        // save_main_type_module_type(1, 2); // RaspRover, Gimbal
+        // mission_play("boot", 1);
     } else {
         ESP_LOGI(TAG, "Skipping boot mission creation - no file system available");
     }
@@ -132,8 +130,13 @@ esp_err_t system_manager_init_hardware(void)
     // Initialize LED controller
     ESP_ERROR_CHECK(led_controller_init());
     
-    // Initialize servo controller
-    ESP_ERROR_CHECK(servo_controller_init());
+    // Temporarily disable servo and gimbal controllers for wheel testing
+    // ESP_ERROR_CHECK(servo_controller_init());
+    // esp_err_t gimbal_result = gimbal_controller_init();
+    // if (gimbal_result != ESP_OK) {
+    //     ESP_LOGW(TAG, "Gimbal controller initialization failed (%s), continuing without gimbal", esp_err_to_name(gimbal_result));
+    // }
+    ESP_LOGI(TAG, "Servo and gimbal controllers disabled for wheel testing");
     
     ESP_LOGI(TAG, "Hardware initialization completed");
     return ESP_OK;

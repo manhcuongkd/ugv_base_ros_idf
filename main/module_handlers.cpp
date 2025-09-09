@@ -6,6 +6,7 @@
 #include <cJSON.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <driver/uart.h>
 
 #include "../inc/module_handlers.h"
 #include "../inc/ugv_config.h"
@@ -16,6 +17,12 @@
 #include "../inc/uart_controller.h"
 
 static const char *TAG = "Module_Handlers";
+
+// UART configuration (matching uart_controller.cpp)
+#define UART_NUM UART_NUM_0
+
+// Private function prototypes
+static esp_err_t uart_send_feedback(const char *json_string);
 
 // Global variables for module control
 static uint32_t prev_time = 0;
@@ -177,8 +184,14 @@ void roarm_m2_info_feedback(void) {
     // Send via UART
     char *json_string = cJSON_Print(feedback);
     if (json_string) {
-        // Use ESP_LOGI for now - in real implementation would use UART
-        ESP_LOGI(TAG, "RoArm-M2 feedback: %s", json_string);
+        esp_err_t ret = uart_send_feedback(json_string);
+        if (ret == ESP_OK) {
+            ESP_LOGD(TAG, "RoArm-M2 feedback sent via UART: %s", json_string);
+        } else {
+            ESP_LOGE(TAG, "Failed to send RoArm-M2 feedback via UART: %s", esp_err_to_name(ret));
+            // Fallback to logging if UART fails
+            ESP_LOGI(TAG, "RoArm-M2 feedback (fallback): %s", json_string);
+        }
         free(json_string);
     }
     
@@ -254,15 +267,73 @@ void gimbal_steady(float input_bias_y) {
     float pan_angle = 0.0f;
     float tilt_angle = input_bias_y + steady_bias;
     
-    // Apply IMU-based stabilization
-    // This is a simplified implementation - real implementation would use
-    // more sophisticated control algorithms
-    if (fabs(imu_data->roll) > 0.1f) {
-        pan_angle += imu_data->roll * 0.5f; // Proportional control
+    // Apply sophisticated IMU-based stabilization with PID control
+    static float prev_roll = 0.0f, prev_pitch = 0.0f;
+    static float roll_integral = 0.0f, pitch_integral = 0.0f;
+    static uint32_t last_stabilization_time = 0;
+    
+    uint32_t current_time = esp_timer_get_time() / 1000; // Convert to ms
+    float dt = (current_time - last_stabilization_time) / 1000.0f; // Convert to seconds
+    if (dt <= 0.0f || dt > 0.1f) dt = 0.01f; // Limit dt to reasonable range
+    last_stabilization_time = current_time;
+    
+    // PID parameters for stabilization
+    const float KP_ROLL = 2.0f;   // Proportional gain for roll
+    const float KI_ROLL = 0.1f;   // Integral gain for roll
+    const float KD_ROLL = 0.5f;   // Derivative gain for roll
+    const float KP_PITCH = 2.0f;  // Proportional gain for pitch
+    const float KI_PITCH = 0.1f;  // Integral gain for pitch
+    const float KD_PITCH = 0.5f;  // Derivative gain for pitch
+    
+    // Dead zone to prevent jitter from small movements
+    const float DEAD_ZONE = 0.05f; // 0.05 radians (~3 degrees)
+    
+    // Roll stabilization (pan control)
+    float roll_error = -imu_data->roll; // Negative for counter-rotation
+    if (fabs(roll_error) > DEAD_ZONE) {
+        // Proportional term
+        float roll_p = roll_error * KP_ROLL;
+        
+        // Integral term with windup protection
+        roll_integral += roll_error * dt;
+        roll_integral = fmaxf(-1.0f, fminf(1.0f, roll_integral)); // Limit integral windup
+        float roll_i = roll_integral * KI_ROLL;
+        
+        // Derivative term
+        float roll_d = (roll_error - prev_roll) / dt * KD_ROLL;
+        
+        // PID output
+        float roll_output = roll_p + roll_i + roll_d;
+        pan_angle += roll_output;
+        
+        prev_roll = roll_error;
+    } else {
+        // Reset integral when in dead zone
+        roll_integral *= 0.95f; // Gradual decay
     }
     
-    if (fabs(imu_data->pitch) > 0.1f) {
-        tilt_angle += imu_data->pitch * 0.5f; // Proportional control
+    // Pitch stabilization (tilt control)
+    float pitch_error = -imu_data->pitch; // Negative for counter-rotation
+    if (fabs(pitch_error) > DEAD_ZONE) {
+        // Proportional term
+        float pitch_p = pitch_error * KP_PITCH;
+        
+        // Integral term with windup protection
+        pitch_integral += pitch_error * dt;
+        pitch_integral = fmaxf(-1.0f, fminf(1.0f, pitch_integral)); // Limit integral windup
+        float pitch_i = pitch_integral * KI_PITCH;
+        
+        // Derivative term
+        float pitch_d = (pitch_error - prev_pitch) / dt * KD_PITCH;
+        
+        // PID output
+        float pitch_output = pitch_p + pitch_i + pitch_d;
+        tilt_angle += pitch_output;
+        
+        prev_pitch = pitch_error;
+    } else {
+        // Reset integral when in dead zone
+        pitch_integral *= 0.95f; // Gradual decay
     }
     
     // Constrain angles
@@ -350,4 +421,44 @@ void module_handlers_get_arm_positions(double *base, double *shoulder, double *e
 void module_handlers_get_gimbal_feedback(gimbal_feedback_t *pan_fb, gimbal_feedback_t *tilt_fb) {
     if (pan_fb) *pan_fb = gimbal_feedback[0];
     if (tilt_fb) *tilt_fb = gimbal_feedback[1];
+}
+
+// ============================================================================
+// PRIVATE FUNCTIONS
+// ============================================================================
+
+/**
+ * @brief Send feedback data via UART
+ * @param json_string JSON string to send
+ * @return ESP_OK on success, error code otherwise
+ */
+static esp_err_t uart_send_feedback(const char *json_string) {
+    if (!json_string) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    size_t len = strlen(json_string);
+    if (len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Send JSON string via UART
+    int bytes_written = uart_write_bytes(UART_NUM, json_string, len);
+    if (bytes_written != len) {
+        ESP_LOGE(TAG, "UART write incomplete: wrote %d of %d bytes", bytes_written, len);
+        return ESP_FAIL;
+    }
+    
+    // Send newline to terminate the JSON message
+    const char *newline = "\n";
+    bytes_written = uart_write_bytes(UART_NUM, newline, 1);
+    if (bytes_written != 1) {
+        ESP_LOGE(TAG, "Failed to send UART newline");
+        return ESP_FAIL;
+    }
+    
+    // Wait for transmission to complete
+    uart_wait_tx_done(UART_NUM, portMAX_DELAY);
+    
+    return ESP_OK;
 }

@@ -13,13 +13,14 @@
 #include "../inc/led_controller.h"
 #include "../inc/mission_system.h"
 #include "../inc/files_controller.h"
+#include "../inc/servo_controller.h"
 #include "../inc/json_parser.h"
 #include "../inc/uart_controller.h"
 #include "../inc/motion_module.h"
 #include "../inc/gimbal_controller.h"
-#include "../inc/servo_controller.h"
 #include "../inc/imu_controller.h"
 #include "../inc/battery_controller.h"
+#include "../inc/system_manager.h"
 
 static const char *TAG = "UGV_Advanced";
 
@@ -100,8 +101,25 @@ void json_cmd_receive_handler(void) {
                 lastZ = pos_z;
                 lastT = pos_t;
                 
-                // In real implementation, this would control the arm
-                // servo_controller_move_arm(pos_x, pos_y, pos_z, pos_t, speed);
+                // Real arm control implementation
+                arm_pose_t target_pose;
+                target_pose.x = (float)pos_x;
+                target_pose.y = (float)pos_y;
+                target_pose.z = (float)pos_z;
+                target_pose.roll = 0.0f;      // Default roll
+                target_pose.pitch = 0.0f;     // Default pitch
+                target_pose.yaw = (float)pos_t; // Use 't' parameter as yaw rotation
+                
+                uint16_t arm_speed = (uint16_t)(speed * 1000); // Convert to servo speed units
+                if (arm_speed < 100) arm_speed = 100;          // Minimum speed
+                if (arm_speed > 2000) arm_speed = 2000;        // Maximum speed
+                
+                esp_err_t ret = servo_controller_set_pose(&target_pose, arm_speed);
+                if (ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to move arm to pose: %s", esp_err_to_name(ret));
+                } else {
+                    ESP_LOGI(TAG, "Arm movement command sent successfully");
+                }
             }
             break;
         }
@@ -141,7 +159,20 @@ void json_cmd_receive_handler(void) {
                 ESP_LOGI(TAG, "Module type set: main=%d, module=%d", main, module);
                 
                 module_type = module;
-                // In real implementation, this would configure the system
+                
+                // Real system configuration implementation
+                esp_err_t ret = motion_module_set_type(main, module);
+                if (ret == ESP_OK) {
+                    ESP_LOGI(TAG, "System configuration updated successfully");
+                    
+                    // Update global configuration
+                    ugv_config.main_type = main;
+                    ugv_config.module_type = module;
+                    
+                    ESP_LOGI(TAG, "Configuration updated: main_type=%d, module_type=%d", main, module);
+                } else {
+                    ESP_LOGE(TAG, "Failed to configure system: %s", esp_err_to_name(ret));
+                }
             }
             break;
         }
@@ -290,8 +321,30 @@ void save_main_type_module_type(uint8_t main_type, uint8_t module_type) {
         // Parse and check for existing CMD_MM_TYPE_SET
         cJSON *mission_json = cJSON_Parse(content);
         if (mission_json) {
-            // Check if same configuration exists
-            // Simplified check - in real implementation would parse all steps
+            // Real implementation: parse all steps and check for duplicate configuration
+            cJSON *steps = cJSON_GetObjectItem(mission_json, "steps");
+            if (cJSON_IsArray(steps)) {
+                int step_count = cJSON_GetArraySize(steps);
+                for (int i = 0; i < step_count; i++) {
+                    cJSON *step = cJSON_GetArrayItem(steps, i);
+                    if (step) {
+                        cJSON *type = cJSON_GetObjectItem(step, "T");
+                        if (cJSON_IsNumber(type) && type->valueint == CMD_MM_TYPE_SET) {
+                            // Found existing CMD_MM_TYPE_SET step
+                            cJSON *existing_main = cJSON_GetObjectItem(step, "main");
+                            cJSON *existing_module = cJSON_GetObjectItem(step, "module");
+                            
+                            if (cJSON_IsNumber(existing_main) && cJSON_IsNumber(existing_module)) {
+                                if (existing_main->valueint == main_type && existing_module->valueint == module_type) {
+                                    ESP_LOGI(TAG, "Same configuration already exists in boot mission, skipping");
+                                    cJSON_Delete(mission_json);
+                                    return; // Configuration already exists, no need to add
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             cJSON_Delete(mission_json);
         }
     }

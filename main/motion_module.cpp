@@ -4,6 +4,9 @@
 #include <inttypes.h>
 #include <driver/gpio.h>
 #include <driver/ledc.h>
+#include <driver/pcnt.h>
+#include <soc/pcnt_struct.h>
+#include <rom/gpio.h>
 #include <nvs_flash.h>
 #include <nvs.h>
 #include <freertos/FreeRTOS.h>
@@ -32,6 +35,7 @@ static int32_t last_right_encoder_count = 0;
 static double left_wheel_speed = 0.0;
 static double right_wheel_speed = 0.0;
 static double encoder_pulse_rate = M_PI * WHEEL_D / ONE_CIRCLE_PLUSES;
+// Debug: encoder_pulse_rate = 3.14159 * 0.0800 / 660 = 0.000380398 m/pulse
 static uint64_t last_left_speed_time = 0;
 static uint64_t last_right_speed_time = 0;
 
@@ -47,15 +51,22 @@ static pid_controller_t right_pid_controller;
 static encoder_data_t current_encoder_data;
 static motion_control_t current_motion_status;
 
+// PCNT units for hardware encoder counting (legacy API like ESP32Encoder)
+static pcnt_unit_t left_encoder_unit = PCNT_UNIT_0;
+static pcnt_unit_t right_encoder_unit = PCNT_UNIT_1;
+static volatile int64_t left_encoder_count = 0;
+static volatile int64_t right_encoder_count = 0;
+
 // Emergency stop flag
 static bool emergency_stop_flag = false;
 
 // Private function prototypes (matching Arduino)
 static esp_err_t init_pwm_channels(void);
-static esp_err_t init_encoder_pins(void);
-static void encoder_isr_handler(void *arg);
+static esp_err_t init_encoder_pcnt(void);
+static void update_encoder_counts_from_pcnt(void);
 static void update_encoder_data(void);
 static float compute_pid(pid_controller_t *pid, float setpoint, float input);
+static void debug_encoder_status(void);
 
 // Motor control functions
 static void motor_left_control(float pwm_input);
@@ -87,8 +98,8 @@ esp_err_t motion_module_init(void)
     // Initialize PWM channels
     ESP_ERROR_CHECK(init_pwm_channels());
     
-    // Initialize encoders
-    ESP_ERROR_CHECK(init_encoder_pins());
+    // Initialize PCNT encoders (hardware-based like Arduino ESP32Encoder)
+    ESP_ERROR_CHECK(init_encoder_pcnt());
     
     // Initialize motion status
     memset(&current_motion_status, 0, sizeof(motion_control_t));
@@ -167,13 +178,12 @@ esp_err_t motion_module_update_encoders(void)
         return ESP_ERR_INVALID_STATE;
     }
     
-    // Update encoder data (this would be called from ISR in real implementation)
-    update_encoder_data();
+    // Update encoder data from PCNT hardware (real implementation with ISR)
+    update_encoder_counts_from_pcnt();
     
-    // Calculate speeds from encoder counts
-    // This is a simplified calculation - in reality you'd use time-based differentiation
-    current_encoder_data.left_speed = (float)current_encoder_data.left_count * 0.001f; // m/s
-    current_encoder_data.right_speed = (float)current_encoder_data.right_count * 0.001f; // m/s
+    // Calculate speeds using sophisticated time-based differentiation
+    // Real implementation with proper encoder pulse rate calculation
+    update_encoder_data();
     
     return ESP_OK;
 }
@@ -245,13 +255,20 @@ esp_err_t motion_module_apply_motor_control(void)
     left_pwm = left_pwm * left_speed_rate;
     right_pwm = right_pwm * right_speed_rate;
     
-    // Limit PWM values
-    left_pwm = (left_pwm > PWM_MAX_DUTY) ? PWM_MAX_DUTY : (left_pwm < -PWM_MAX_DUTY) ? -PWM_MAX_DUTY : left_pwm;
-    right_pwm = (right_pwm > PWM_MAX_DUTY) ? PWM_MAX_DUTY : (right_pwm < -PWM_MAX_DUTY) ? -PWM_MAX_DUTY : right_pwm;
+    // PWM smoothing for ultra-smooth motion (exponential moving average)
+    static float left_pwm_filtered = 0.0f;
+    static float right_pwm_filtered = 0.0f;
     
-    // Apply to motors
-    motor_left_control(left_pwm);
-    motor_right_control(right_pwm);
+    left_pwm_filtered = left_pwm_filtered + PWM_SMOOTHING_FACTOR * (left_pwm - left_pwm_filtered);
+    right_pwm_filtered = right_pwm_filtered + PWM_SMOOTHING_FACTOR * (right_pwm - right_pwm_filtered);
+    
+    // Limit filtered PWM values
+    left_pwm_filtered = (left_pwm_filtered > PWM_MAX_DUTY) ? PWM_MAX_DUTY : (left_pwm_filtered < -PWM_MAX_DUTY) ? -PWM_MAX_DUTY : left_pwm_filtered;
+    right_pwm_filtered = (right_pwm_filtered > PWM_MAX_DUTY) ? PWM_MAX_DUTY : (right_pwm_filtered < -PWM_MAX_DUTY) ? -PWM_MAX_DUTY : right_pwm_filtered;
+    
+    // Apply smoothed PWM to motors
+    motor_left_control(left_pwm_filtered);
+    motor_right_control(right_pwm_filtered);
     
     return ESP_OK;
 }
@@ -262,9 +279,9 @@ esp_err_t motion_module_set_speeds(float left_speed, float right_speed)
         return ESP_ERR_INVALID_STATE;
     }
     
-    // Limit speeds to valid range (-2.0 to 2.0)
-    left_speed = (left_speed > 2.0f) ? 2.0f : (left_speed < -2.0f) ? -2.0f : left_speed;
-    right_speed = (right_speed > 2.0f) ? 2.0f : (right_speed < -2.0f) ? -2.0f : right_speed;
+    // Limit speeds to valid range (-3.0 to 3.0)
+    left_speed = (left_speed > 3.0f) ? 3.0f : (left_speed < -3.0f) ? -3.0f : left_speed;
+    right_speed = (right_speed > 3.0f) ? 3.0f : (right_speed < -3.0f) ? -3.0f : right_speed;
     
     // Enable PID computation
     pid_compute_enabled = true;
@@ -281,8 +298,9 @@ esp_err_t motion_module_set_speeds(float left_speed, float right_speed)
     current_motion_status.left_speed = left_speed;
     current_motion_status.right_speed = right_speed;
     
-    ESP_LOGI(TAG, "Set speeds: L=%.2f, R=%.2f (setpoints: L=%.2f, R=%.2f)", 
-             left_speed, right_speed, left_setpoint, right_setpoint);
+    ESP_LOGI(TAG, "Set speeds: L=%.2f, R=%.2f (setpoints: L=%.2f, R=%.2f) PID: %s", 
+             left_speed, right_speed, left_setpoint, right_setpoint,
+             pid_compute_enabled ? "ENABLED" : "DISABLED");
     
     return ESP_OK;
 }
@@ -548,87 +566,134 @@ static esp_err_t init_pwm_channels(void)
     return ESP_OK;
 }
 
-static esp_err_t init_encoder_pins(void)
+// PCNT interrupt handler (like ESP32Encoder, adapted for ESP-IDF v5.0)
+static void IRAM_ATTR pcnt_intr_handler(void *arg)
 {
-    ESP_LOGI(TAG, "Initializing encoder pins...");
+    uint32_t intr_status = PCNT.int_st.val;
     
-    // Configure encoder pins as inputs with pull-up
-    gpio_config_t io_conf = {};
-    io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = (1ULL << AENCA) | (1ULL << AENCB) |
-                           (1ULL << BENCA) | (1ULL << BENCB);
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
-    io_conf.intr_type = GPIO_INTR_ANYEDGE;
-    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    // Handle left encoder (UNIT_0) events
+    if (intr_status & BIT(PCNT_UNIT_0)) {
+        if (PCNT.status_unit[PCNT_UNIT_0].h_lim_lat) {
+            left_encoder_count = left_encoder_count + 32767;
+            pcnt_counter_clear(PCNT_UNIT_0);
+        }
+        if (PCNT.status_unit[PCNT_UNIT_0].l_lim_lat) {
+            left_encoder_count = left_encoder_count - 32767;
+            pcnt_counter_clear(PCNT_UNIT_0);
+        }
+        PCNT.int_clr.val = BIT(PCNT_UNIT_0);
+    }
     
-    // Install GPIO ISR service
-    ESP_ERROR_CHECK(gpio_install_isr_service(0));
+    // Handle right encoder (UNIT_1) events  
+    if (intr_status & BIT(PCNT_UNIT_1)) {
+        if (PCNT.status_unit[PCNT_UNIT_1].h_lim_lat) {
+            right_encoder_count = right_encoder_count + 32767;
+            pcnt_counter_clear(PCNT_UNIT_1);
+        }
+        if (PCNT.status_unit[PCNT_UNIT_1].l_lim_lat) {
+            right_encoder_count = right_encoder_count - 32767;
+            pcnt_counter_clear(PCNT_UNIT_1);
+        }
+        PCNT.int_clr.val = BIT(PCNT_UNIT_1);
+    }
+}
+
+static esp_err_t init_encoder_pcnt(void)
+{
+    ESP_LOGI(TAG, "Initializing PCNT encoders (legacy API like Arduino ESP32Encoder)");
     
-    // Add ISR handlers for encoder pins
-    ESP_ERROR_CHECK(gpio_isr_handler_add(AENCA, encoder_isr_handler, (void*)0));
-    ESP_ERROR_CHECK(gpio_isr_handler_add(AENCB, encoder_isr_handler, (void*)1));
-    ESP_ERROR_CHECK(gpio_isr_handler_add(BENCA, encoder_isr_handler, (void*)2));
-    ESP_ERROR_CHECK(gpio_isr_handler_add(BENCB, encoder_isr_handler, (void*)3));
+    // Configure GPIO pins first (like ESP32Encoder does, using ESP-IDF v5.0 compatible function)
+    esp_rom_gpio_pad_select_gpio(AENCA);
+    esp_rom_gpio_pad_select_gpio(AENCB);
+    esp_rom_gpio_pad_select_gpio(BENCA);
+    esp_rom_gpio_pad_select_gpio(BENCB);
     
-    ESP_LOGI(TAG, "Encoder pins initialized");
+    gpio_set_direction(AENCA, GPIO_MODE_INPUT);
+    gpio_set_direction(AENCB, GPIO_MODE_INPUT);
+    gpio_set_direction(BENCA, GPIO_MODE_INPUT);
+    gpio_set_direction(BENCB, GPIO_MODE_INPUT);
+    
+    // Enable pull-down resistors (like ESP32Encoder default)
+    gpio_pulldown_en(AENCA);
+    gpio_pulldown_en(AENCB);
+    gpio_pulldown_en(BENCA);
+    gpio_pulldown_en(BENCB);
+    
+    // Left encoder PCNT configuration (half-quad like Arduino)
+    pcnt_config_t left_pcnt_config = {
+        .pulse_gpio_num = AENCA,
+        .ctrl_gpio_num = AENCB,
+        .lctrl_mode = PCNT_MODE_KEEP,
+        .hctrl_mode = PCNT_MODE_REVERSE,
+        .pos_mode = PCNT_COUNT_DEC,
+        .neg_mode = PCNT_COUNT_INC,
+        .counter_h_lim = 32767,
+        .counter_l_lim = -32767,
+        .unit = left_encoder_unit,
+        .channel = PCNT_CHANNEL_0,
+    };
+    ESP_ERROR_CHECK(pcnt_unit_config(&left_pcnt_config));
+    
+    // Right encoder PCNT configuration (half-quad like Arduino)
+    pcnt_config_t right_pcnt_config = {
+        .pulse_gpio_num = BENCA,
+        .ctrl_gpio_num = BENCB,
+        .lctrl_mode = PCNT_MODE_KEEP,
+        .hctrl_mode = PCNT_MODE_REVERSE,
+        .pos_mode = PCNT_COUNT_DEC,
+        .neg_mode = PCNT_COUNT_INC,
+        .counter_h_lim = 32767,
+        .counter_l_lim = -32767,
+        .unit = right_encoder_unit,
+        .channel = PCNT_CHANNEL_0,
+    };
+    ESP_ERROR_CHECK(pcnt_unit_config(&right_pcnt_config));
+    
+    // Set up filters (like ESP32Encoder setFilter(250))
+    ESP_ERROR_CHECK(pcnt_set_filter_value(left_encoder_unit, 250));
+    ESP_ERROR_CHECK(pcnt_filter_enable(left_encoder_unit));
+    ESP_ERROR_CHECK(pcnt_set_filter_value(right_encoder_unit, 250));
+    ESP_ERROR_CHECK(pcnt_filter_enable(right_encoder_unit));
+    
+    // Enable interrupts for overflow/underflow
+    ESP_ERROR_CHECK(pcnt_event_enable(left_encoder_unit, PCNT_EVT_H_LIM));
+    ESP_ERROR_CHECK(pcnt_event_enable(left_encoder_unit, PCNT_EVT_L_LIM));
+    ESP_ERROR_CHECK(pcnt_event_enable(right_encoder_unit, PCNT_EVT_H_LIM));
+    ESP_ERROR_CHECK(pcnt_event_enable(right_encoder_unit, PCNT_EVT_L_LIM));
+    
+    // Install ISR service and handlers
+    ESP_ERROR_CHECK(pcnt_isr_service_install(0));
+    ESP_ERROR_CHECK(pcnt_isr_handler_add(left_encoder_unit, pcnt_intr_handler, NULL));
+    ESP_ERROR_CHECK(pcnt_isr_handler_add(right_encoder_unit, pcnt_intr_handler, NULL));
+    
+    // Enable interrupts
+    ESP_ERROR_CHECK(pcnt_intr_enable(left_encoder_unit));
+    ESP_ERROR_CHECK(pcnt_intr_enable(right_encoder_unit));
+    
+    // Clear and start counters
+    ESP_ERROR_CHECK(pcnt_counter_clear(left_encoder_unit));
+    ESP_ERROR_CHECK(pcnt_counter_clear(right_encoder_unit));
+    ESP_ERROR_CHECK(pcnt_counter_resume(left_encoder_unit));
+    ESP_ERROR_CHECK(pcnt_counter_resume(right_encoder_unit));
+    
+    ESP_LOGI(TAG, "PCNT encoders initialized successfully (legacy API)");
     return ESP_OK;
 }
 
-static void encoder_isr_handler(void *arg)
+
+// PCNT-based encoder reading functions (replaces ISR, like ESP32Encoder.getCount())
+static void update_encoder_counts_from_pcnt(void)
 {
-    // Proper quadrature encoder ISR handler
-    uint32_t pin_num = (uint32_t)arg;
+    // Read counts from PCNT hardware using legacy API
+    int16_t left_raw_count = 0;
+    int16_t right_raw_count = 0;
     
-    if (pin_num == 0 || pin_num == 1) { // Left encoder (AENCA/AENCB)
-        static int last_a_state = 0;
-        static int last_b_state = 0;
-        
-        int a_state = gpio_get_level(AENCA);
-        int b_state = gpio_get_level(AENCB);
-        
-        // Quadrature decoding: A leads B for forward, B leads A for reverse
-        if (a_state != last_a_state) {
-            if (a_state == b_state) {
-                current_encoder_data.left_count++;
-            } else {
-                current_encoder_data.left_count--;
-            }
-            last_a_state = a_state;
-        }
-        if (b_state != last_b_state) {
-            if (b_state != a_state) {
-                current_encoder_data.left_count++;
-            } else {
-                current_encoder_data.left_count--;
-            }
-            last_b_state = b_state;
-        }
-    } else if (pin_num == 2 || pin_num == 3) { // Right encoder (BENCA/BENCB)
-        static int last_a_state_r = 0;
-        static int last_b_state_r = 0;
-        
-        int a_state = gpio_get_level(BENCA);
-        int b_state = gpio_get_level(BENCB);
-        
-        // Quadrature decoding: A leads B for forward, B leads A for reverse
-        if (a_state != last_a_state_r) {
-            if (a_state == b_state) {
-                current_encoder_data.right_count++;
-            } else {
-                current_encoder_data.right_count--;
-            }
-            last_a_state_r = a_state;
-        }
-        if (b_state != last_b_state_r) {
-            if (b_state != a_state) {
-                current_encoder_data.right_count++;
-            } else {
-                current_encoder_data.right_count--;
-            }
-            last_b_state_r = b_state;
-        }
-    }
+    pcnt_get_counter_value(left_encoder_unit, &left_raw_count);
+    pcnt_get_counter_value(right_encoder_unit, &right_raw_count);
+    
+    // Combine overflow counts with raw counts (like ESP32Encoder does)
+    current_encoder_data.left_count = left_encoder_count + left_raw_count;
+    current_encoder_data.right_count = right_encoder_count + right_raw_count;
 }
 
 static void update_encoder_data(void)
@@ -815,6 +880,8 @@ esp_err_t motion_module_set_type(uint8_t main_type, uint8_t module_type) {
     
     // Update encoder pulse rate based on current configuration
     encoder_pulse_rate = M_PI * wheel_diameter / one_circle_pulses;
+    ESP_LOGI(TAG, "Encoder pulse rate: %.9f m/pulse (diameter=%.4f, pulses=%" PRId32 ")", 
+             encoder_pulse_rate, wheel_diameter, one_circle_pulses);
     ESP_LOGI(TAG, "Updated encoder_pulse_rate: %.6f", encoder_pulse_rate);
     
     // Store module types in NVS
@@ -907,86 +974,178 @@ esp_err_t motion_module_load_config_from_nvs(void) {
 
 static void motor_left_control(float pwm_input) {
     int pwm_int = round(pwm_input);
-    if (motor_direction) {
-        if (pwm_int < 0) {
-            gpio_set_level(AIN1, 1);
-            gpio_set_level(AIN2, 0);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwm_int));
-        } else {
-            gpio_set_level(AIN1, 0);
-            gpio_set_level(AIN2, 1);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwm_int));
-        }
-    } else {
-        if (pwm_int < 0) {
-            gpio_set_level(AIN1, 0);
-            gpio_set_level(AIN2, 1);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwm_int));
-        } else {
-            gpio_set_level(AIN1, 1);
-            gpio_set_level(AIN2, 0);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, abs(pwm_int));
-        }
+    
+    static int last_pwm_int = 999999; // Force first log
+    if (pwm_int != last_pwm_int) {
+        ESP_LOGI(TAG, "Left motor control: pwm_input=%.1f, pwm_int=%d", pwm_input, pwm_int);
+        last_pwm_int = pwm_int;
     }
+    
+    // Handle zero PWM case
+    if (abs(pwm_int) < 1) {
+        ESP_LOGI(TAG, "Left motor STOP (PWM=0)");
+        gpio_set_level(AIN1, 0);
+        gpio_set_level(AIN2, 0);
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+        return;
+    }
+    
+    // Limit PWM to valid range
+    if (pwm_int > PWM_MAX_DUTY) pwm_int = PWM_MAX_DUTY;
+    if (pwm_int < -PWM_MAX_DUTY) pwm_int = -PWM_MAX_DUTY;
+    
+    // Direction control (same as right motor - no inversion needed)
+    if (pwm_int > 0) {
+        // Forward direction for left motor
+        if (SET_MOTOR_DIR) {
+            gpio_set_level(AIN1, 1);
+            gpio_set_level(AIN2, 0);
+        } else {
+            // Same direction as right motor
+            gpio_set_level(AIN1, 1);
+            gpio_set_level(AIN2, 0);
+        }
+        ESP_LOGI(TAG, "Left motor: Setting PWM duty to %d (max: %d)", pwm_int, PWM_MAX_DUTY);
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, pwm_int);
+    } else {
+        // Reverse direction for left motor
+        if (SET_MOTOR_DIR) {
+            gpio_set_level(AIN1, 0);
+            gpio_set_level(AIN2, 1);
+        } else {
+            // Same direction as right motor
+            gpio_set_level(AIN1, 0);
+            gpio_set_level(AIN2, 1);
+        }
+        ESP_LOGI(TAG, "Left motor: Setting PWM duty to %d (max: %d)", -pwm_int, PWM_MAX_DUTY);
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, -pwm_int);
+    }
+    
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
 
 static void motor_right_control(float pwm_input) {
     int pwm_int = round(pwm_input);
-    if (motor_direction) {
+    
+    static int last_pwm_int = 999999; // Force first log
+    if (pwm_int != last_pwm_int) {
+        ESP_LOGI(TAG, "Right motor control: pwm_input=%.1f, pwm_int=%d", pwm_input, pwm_int);
+        last_pwm_int = pwm_int;
+    }
+    
+    // Handle zero PWM case
+    if (abs(pwm_int) < 1) {
+        ESP_LOGI(TAG, "Right motor STOP (PWM=0)");
+        gpio_set_level(BIN1, 0);
+        gpio_set_level(BIN2, 0);
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+        return;
+    }
+    
+    // Arduino-style motor control logic
+    if (motor_direction) { // SET_MOTOR_DIR = true
         if (pwm_int < 0) {
-            gpio_set_level(BIN1, 1);
-            gpio_set_level(BIN2, 0);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwm_int));
+            gpio_set_level(BIN1, 1);  // HIGH
+            gpio_set_level(BIN2, 0);  // LOW
         } else {
-            gpio_set_level(BIN1, 0);
-            gpio_set_level(BIN2, 1);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwm_int));
+            gpio_set_level(BIN1, 0);  // LOW
+            gpio_set_level(BIN2, 1);  // HIGH
         }
-    } else {
+    } else { // SET_MOTOR_DIR = false
         if (pwm_int < 0) {
-            gpio_set_level(BIN1, 0);
-            gpio_set_level(BIN2, 1);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwm_int));
+            gpio_set_level(BIN1, 0);  // LOW
+            gpio_set_level(BIN2, 1);  // HIGH
         } else {
-            gpio_set_level(BIN1, 1);
-            gpio_set_level(BIN2, 0);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, abs(pwm_int));
+            gpio_set_level(BIN1, 1);  // HIGH
+            gpio_set_level(BIN2, 0);  // LOW
         }
     }
+    
+    // Use PWM value directly (Arduino style: 8-bit, 0-255 range)
+    uint32_t pwm_duty = abs(pwm_int);
+    ESP_LOGI(TAG, "Right motor: Setting PWM duty to %ld (max: %d)", pwm_duty, PWM_MAX_DUTY);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, pwm_duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
 }
 
 static void calculate_left_wheel_speed(void) {
+    // Update encoder counts from PCNT hardware first
+    update_encoder_counts_from_pcnt();
+    
     uint64_t current_time = esp_timer_get_time();
     int32_t encoder_pulses = current_encoder_data.left_count;
+    
+    // Debug logging for encoder counts
+    static int32_t last_logged_count = -999999;
+    if (encoder_pulses != last_logged_count) {
+        ESP_LOGI(TAG, "Left encoder count: %ld (changed by %ld)", encoder_pulses, encoder_pulses - last_logged_count);
+        last_logged_count = encoder_pulses;
+    }
     
     if (last_left_speed_time > 0) {
         double dt = (double)(current_time - last_left_speed_time) / 1000000.0; // Convert to seconds
         
         if (dt > 0.001) { // Minimum 1ms time difference
+            double old_speed = left_wheel_speed;
+            // Encoder direction (normal, since we inverted the motor instead)
             if (!motor_direction) {
                 left_wheel_speed = (encoder_pulse_rate * (encoder_pulses - last_left_encoder_count)) / dt;
             } else {
                 left_wheel_speed = (encoder_pulse_rate * (last_left_encoder_count - encoder_pulses)) / dt;
+            }
+            
+            // Log speed calculation details
+            if (abs(left_wheel_speed - old_speed) > 0.01) {
+                ESP_LOGI(TAG, "Left speed calc: pulses=%ld->%ld, dt=%.3f, speed=%.3f m/s", 
+                         last_left_encoder_count, encoder_pulses, dt, left_wheel_speed);
             }
         }
     }
     
     last_left_encoder_count = encoder_pulses;
     last_left_speed_time = current_time;
+    
+    // Debug encoder status periodically
+    debug_encoder_status();
 }
 
 static void calculate_right_wheel_speed(void) {
+    // No need to update PCNT again since left wheel function already did it
     uint64_t current_time = esp_timer_get_time();
     int32_t encoder_pulses = current_encoder_data.right_count;
+    
+    // Debug logging for encoder counts
+    static int32_t last_logged_count = -999999;
+    if (encoder_pulses != last_logged_count) {
+        ESP_LOGI(TAG, "Right encoder count: %ld (changed by %ld)", encoder_pulses, encoder_pulses - last_logged_count);
+        last_logged_count = encoder_pulses;
+    }
     
     if (last_right_speed_time > 0) {
         double dt = (double)(current_time - last_right_speed_time) / 1000000.0; // Convert to seconds
         
         if (dt > 0.001) { // Minimum 1ms time difference
-            if (!motor_direction) {
-                right_wheel_speed = (encoder_pulse_rate * (encoder_pulses - last_right_encoder_count)) / dt;
-            } else {
-                right_wheel_speed = (encoder_pulse_rate * (last_right_encoder_count - encoder_pulses)) / dt;
+            double old_speed = right_wheel_speed;
+            // Encoder direction (normal) with potential 2x scaling fix
+            long pulse_diff = (!motor_direction) ? 
+                (encoder_pulses - last_right_encoder_count) : 
+                (last_right_encoder_count - encoder_pulses);
+            
+            // TEST: Divide by 2 to match Arduino's half-quad counting behavior
+            pulse_diff = pulse_diff / 2;
+            right_wheel_speed = (encoder_pulse_rate * pulse_diff) / dt;
+            
+            // Log speed calculation details with scaling debug
+            if (abs(right_wheel_speed - old_speed) > 0.01) {
+                long raw_pulse_diff = encoder_pulses - last_right_encoder_count;
+                ESP_LOGI(TAG, "RIGHT SPEED DEBUG:");
+                ESP_LOGI(TAG, "  Pulses: %ld->%ld (raw_diff=%ld, scaled_diff=%ld)", last_right_encoder_count, encoder_pulses, raw_pulse_diff, pulse_diff);
+                ESP_LOGI(TAG, "  Time: dt=%.6f sec", dt);
+                ESP_LOGI(TAG, "  Pulse rate: %.9f m/pulse", encoder_pulse_rate);
+                ESP_LOGI(TAG, "  Scaled calc: (%.9f * %ld) / %.6f = %.3f m/s", encoder_pulse_rate, pulse_diff, dt, right_wheel_speed);
+                ESP_LOGI(TAG, "  Final speed: %.3f m/s", right_wheel_speed);
             }
         }
     }
@@ -995,12 +1154,52 @@ static void calculate_right_wheel_speed(void) {
     last_right_speed_time = current_time;
 }
 
+static void debug_encoder_status(void) {
+    static uint64_t last_debug_time = 0;
+    uint64_t current_time = esp_timer_get_time() / 1000; // ms
+    
+    if (current_time - last_debug_time > 1000) { // Every 1 second
+        // Force PCNT read using legacy API
+        int16_t left_raw_count = 0;
+        int16_t right_raw_count = 0;
+        
+        esp_err_t left_err = pcnt_get_counter_value(left_encoder_unit, &left_raw_count);
+        esp_err_t right_err = pcnt_get_counter_value(right_encoder_unit, &right_raw_count);
+        
+        ESP_LOGI(TAG, "=== PCNT DEBUG (Legacy API) ===");
+        ESP_LOGI(TAG, "Left PCNT: raw=%d, overflow=%lld, total=%lld, err=%s", 
+                 left_raw_count, left_encoder_count, left_encoder_count + left_raw_count, esp_err_to_name(left_err));
+        ESP_LOGI(TAG, "Right PCNT: raw=%d, overflow=%lld, total=%lld, err=%s", 
+                 right_raw_count, right_encoder_count, right_encoder_count + right_raw_count, esp_err_to_name(right_err));
+        ESP_LOGI(TAG, "Stored counts - Left: %ld, Right: %ld", 
+                 current_encoder_data.left_count, current_encoder_data.right_count);
+        ESP_LOGI(TAG, "Wheel speeds - Left: %.3f, Right: %.3f", 
+                 left_wheel_speed, right_wheel_speed);
+        last_debug_time = current_time;
+    }
+}
+
 static void compute_left_pid_controller(void) {
     if (!pid_compute_enabled) {
+        ESP_LOGW(TAG, "Left PID: compute disabled");
         return;
     }
 
     left_pid_output = compute_pid(&left_pid_controller, left_setpoint, left_wheel_speed);
+    
+    // Debug logging (only log when values change)
+    static float last_setpoint = -999.0f;
+    static float last_speed = -999.0f;
+    static float last_output = -999.0f;
+    
+    if (left_setpoint != last_setpoint || left_wheel_speed != last_speed || left_pid_output != last_output) {
+        ESP_LOGI(TAG, "Left PID: setpoint=%.3f, speed=%.3f, output=%.1f", 
+                 left_setpoint, left_wheel_speed, left_pid_output);
+        last_setpoint = left_setpoint;
+        last_speed = left_wheel_speed;
+        last_output = left_pid_output;
+    }
+    
     if (abs(left_pid_output) < PID_THRESHOLD_PWM) {
         left_pid_output = 0;
     }
@@ -1012,10 +1211,25 @@ static void compute_left_pid_controller(void) {
 
 static void compute_right_pid_controller(void) {
     if (!pid_compute_enabled) {
+        ESP_LOGW(TAG, "Right PID: compute disabled");
         return;
     }
 
     right_pid_output = compute_pid(&right_pid_controller, right_setpoint, right_wheel_speed);
+    
+    // Debug logging (only log when values change)
+    static float last_setpoint = -999.0f;
+    static float last_speed = -999.0f;
+    static float last_output = -999.0f;
+    
+    if (right_setpoint != last_setpoint || right_wheel_speed != last_speed || right_pid_output != last_output) {
+        ESP_LOGI(TAG, "Right PID: setpoint=%.3f, speed=%.3f, output=%.1f", 
+                 right_setpoint, right_wheel_speed, right_pid_output);
+        last_setpoint = right_setpoint;
+        last_speed = right_wheel_speed;
+        last_output = right_pid_output;
+    }
+    
     if (abs(right_pid_output) < PID_THRESHOLD_PWM) {
         right_pid_output = 0;
     }
@@ -1040,4 +1254,81 @@ void motion_module_left_pid_compute(void) {
 
 void motion_module_right_pid_compute(void) {
     compute_right_pid_controller();
+}
+
+// Global test state variables (persistent across calls)
+static bool g_test_started = false;
+static uint64_t g_test_start_time = 0;
+static int g_test_phase = 0; // 0=forward, 1=backward, 2=completed
+static uint64_t g_last_log_time = 0;
+
+esp_err_t motion_module_test_wheels(void)
+{
+    if (!motion_initialized) {
+        ESP_LOGE(TAG, "Motion module not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint64_t current_time = esp_timer_get_time() / 1000; // Convert to milliseconds
+    
+    // Initialize test on first call
+    if (!g_test_started) {
+        g_test_start_time = current_time;
+        g_test_started = true;
+        g_test_phase = 0;
+        g_last_log_time = 0;
+        ESP_LOGI(TAG, "=== STARTING SIMPLE MOTOR TEST ===");
+        ESP_LOGI(TAG, "Phase 1: Moving FORWARD for 15 seconds");
+        
+        // Set motors to forward immediately
+        motor_left_control(3000);
+        motor_right_control(3000);
+        return ESP_OK;
+    }
+    
+    uint64_t elapsed_time = current_time - g_test_start_time;
+    
+    if (g_test_phase == 0) {
+        // Forward phase: 0-15 seconds
+        if (elapsed_time < 15000) {
+            // Log progress every 3 seconds
+            if (current_time - g_last_log_time > 3000) {
+                ESP_LOGI(TAG, "Moving FORWARD - Time: %.1fs / 15s", elapsed_time / 1000.0);
+                g_last_log_time = current_time;
+            }
+            // Keep moving forward (don't call motor functions repeatedly)
+        } else {
+            // Switch to backward phase
+            g_test_phase = 1;
+            g_test_start_time = current_time; // Reset timer for backward phase
+            g_last_log_time = current_time;
+            ESP_LOGI(TAG, "Phase 2: Moving BACKWARD for 15 seconds");
+            motor_left_control(-3000);  // Backward
+            motor_right_control(-3000); // Backward
+        }
+        
+    } else if (g_test_phase == 1) {
+        // Backward phase
+        uint64_t backward_time = current_time - g_test_start_time;
+        if (backward_time < 15000) {
+            // Log progress every 3 seconds
+            if (current_time - g_last_log_time > 3000) {
+                ESP_LOGI(TAG, "Moving BACKWARD - Time: %.1fs / 15s", backward_time / 1000.0);
+                g_last_log_time = current_time;
+            }
+            // Keep moving backward (don't call motor functions repeatedly)
+        } else {
+            // Test complete
+            g_test_phase = 2;
+            ESP_LOGI(TAG, "=== MOTOR TEST COMPLETED - STOPPING ===");
+            motor_left_control(0);   // Stop
+            motor_right_control(0);  // Stop
+        }
+        
+    } else {
+        // Test completed - keep motors stopped
+        // Do nothing, motors already stopped
+    }
+    
+    return ESP_OK;
 }

@@ -39,7 +39,9 @@ ugv_base_ros_idf/
 │   ├── uart_controller.h            # UART communication
 │   ├── mission_system.h             # Mission execution system
 │   ├── ugv_advanced.h               # Advanced UGV features
-│   └── module_handlers.h            # Module-specific handlers
+│   ├── module_handlers.h            # Module-specific handlers
+│   ├── common_utils.h               # Common utility macros and validation
+│   └── system_info.h                # System information and status
 ├── main/                             # Source files (modular implementation)
 │   ├── CMakeLists.txt               # Component CMake configuration
 │   ├── main.cpp                     # Main application entry point
@@ -59,10 +61,14 @@ ugv_base_ros_idf/
 │   ├── uart_controller.cpp          # UART communication implementation
 │   ├── mission_system.cpp           # Mission system implementation
 │   ├── ugv_advanced.cpp             # Advanced features implementation
-│   └── module_handlers.cpp          # Module handlers implementation
+│   ├── module_handlers.cpp          # Module handlers implementation
+│   └── system_info.cpp              # System information implementation
 ├── build.sh                          # Build automation script
 ├── setup.sh                          # Automated setup script
 ├── install_dependencies.sh           # Dependency installation script
+├── switch_idf.sh                     # ESP-IDF version switching script
+├── partitions.csv                    # Partition table configuration
+├── src/                              # Additional source components
 └── README.md                         # This file
 ```
 

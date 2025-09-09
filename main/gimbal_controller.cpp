@@ -1,4 +1,5 @@
 #include "../inc/gimbal_controller.h"
+#include "../inc/servo_controller.h"
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <driver/ledc.h>
@@ -136,14 +137,14 @@ esp_err_t gimbal_controller_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    // Center the gimbal
+    gimbal_initialized = true;
+    ESP_LOGI(TAG, "Gimbal controller initialized successfully");
+
+    // Center the gimbal after initialization
     ret = gimbal_controller_center();
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to center gimbal: %s", esp_err_to_name(ret));
     }
-
-    gimbal_initialized = true;
-    ESP_LOGI(TAG, "Gimbal controller initialized successfully");
     return ESP_OK;
 }
 
@@ -902,25 +903,78 @@ esp_err_t gimbal_controller_get_feedback(gimbal_feedback_t *pan_fb, gimbal_feedb
         return ESP_ERR_INVALID_ARG;
     }
 
-    // TODO: Implement real servo feedback reading via UART
-    // For now, return simulated feedback based on current positions
-    pan_fb->status = true;
-    pan_fb->pos = gimbal_control.pan_position;
-    pan_fb->speed = 0;
-    pan_fb->load = 0;
-    pan_fb->voltage = 12.0f;
-    pan_fb->current = 0.5f;
-    pan_fb->temper = 25.0f;
-    pan_fb->mode = 0;
-
-    tilt_fb->status = true;
-    tilt_fb->pos = gimbal_control.tilt_position;
-    tilt_fb->speed = 0;
-    tilt_fb->load = 0;
-    tilt_fb->voltage = 12.0f;
-    tilt_fb->current = 0.5f;
-    tilt_fb->temper = 25.0f;
-    tilt_fb->mode = 0;
+    // Read real servo feedback via UART using SCServo protocol
+    esp_err_t ret;
+    
+    // Read pan servo feedback (ID = GIMBAL_PAN_ID = 2)
+    uint16_t pan_pos, pan_speed, pan_load;
+    uint8_t pan_voltage, pan_temperature, pan_moving;
+    
+    ret = scservo_read_pos(GIMBAL_PAN_ID, &pan_pos);
+    if (ret == ESP_OK) {
+        pan_fb->status = true;
+        pan_fb->pos = pan_pos;
+        
+        // Read additional pan servo data
+        scservo_read_speed(GIMBAL_PAN_ID, &pan_speed);
+        scservo_read_load(GIMBAL_PAN_ID, &pan_load);
+        scservo_read_voltage(GIMBAL_PAN_ID, &pan_voltage);
+        scservo_read_temperature(GIMBAL_PAN_ID, &pan_temperature);
+        scservo_read_moving(GIMBAL_PAN_ID, &pan_moving);
+        
+        pan_fb->speed = pan_speed;
+        pan_fb->load = pan_load;
+        pan_fb->voltage = pan_voltage / 10.0f;  // Convert to volts
+        pan_fb->current = 0.5f;  // Current not available in basic SCServo protocol
+        pan_fb->temper = pan_temperature;
+        pan_fb->mode = pan_moving;
+    } else {
+        // Fallback to simulated data if UART read fails
+        pan_fb->status = false;
+        pan_fb->pos = gimbal_control.pan_position;
+        pan_fb->speed = 0;
+        pan_fb->load = 0;
+        pan_fb->voltage = 12.0f;
+        pan_fb->current = 0.5f;
+        pan_fb->temper = 25.0f;
+        pan_fb->mode = 0;
+        ESP_LOGW(TAG, "Failed to read pan servo feedback, using simulated data");
+    }
+    
+    // Read tilt servo feedback (ID = GIMBAL_TILT_ID = 1)
+    uint16_t tilt_pos, tilt_speed, tilt_load;
+    uint8_t tilt_voltage, tilt_temperature, tilt_moving;
+    
+    ret = scservo_read_pos(GIMBAL_TILT_ID, &tilt_pos);
+    if (ret == ESP_OK) {
+        tilt_fb->status = true;
+        tilt_fb->pos = tilt_pos;
+        
+        // Read additional tilt servo data
+        scservo_read_speed(GIMBAL_TILT_ID, &tilt_speed);
+        scservo_read_load(GIMBAL_TILT_ID, &tilt_load);
+        scservo_read_voltage(GIMBAL_TILT_ID, &tilt_voltage);
+        scservo_read_temperature(GIMBAL_TILT_ID, &tilt_temperature);
+        scservo_read_moving(GIMBAL_TILT_ID, &tilt_moving);
+        
+        tilt_fb->speed = tilt_speed;
+        tilt_fb->load = tilt_load;
+        tilt_fb->voltage = tilt_voltage / 10.0f;  // Convert to volts
+        tilt_fb->current = 0.5f;  // Current not available in basic SCServo protocol
+        tilt_fb->temper = tilt_temperature;
+        tilt_fb->mode = tilt_moving;
+    } else {
+        // Fallback to simulated data if UART read fails
+        tilt_fb->status = false;
+        tilt_fb->pos = gimbal_control.tilt_position;
+        tilt_fb->speed = 0;
+        tilt_fb->load = 0;
+        tilt_fb->voltage = 12.0f;
+        tilt_fb->current = 0.5f;
+        tilt_fb->temper = 25.0f;
+        tilt_fb->mode = 0;
+        ESP_LOGW(TAG, "Failed to read tilt servo feedback, using simulated data");
+    }
 
     ESP_LOGD(TAG, "Servo feedback: pan_pos=%d, tilt_pos=%d", pan_fb->pos, tilt_fb->pos);
     return ESP_OK;
@@ -938,13 +992,19 @@ esp_err_t gimbal_controller_set_torque(uint8_t servo_id, bool enable)
         return ESP_ERR_INVALID_ARG;
     }
 
-    // TODO: Implement real servo torque control via UART
-    // For now, just log the command
-    ESP_LOGI(TAG, "Servo %d torque %s", servo_id, enable ? "enabled" : "disabled");
-    
-    // Simulate servo stop delay
-    if (!enable) {
-        vTaskDelay(pdMS_TO_TICKS(SERVO_STOP_DELAY));
+    // Implement real servo torque control via UART using SCServo protocol
+    esp_err_t ret = scservo_enable_torque(servo_id, enable ? 1 : 0);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Servo %d torque %s successfully", servo_id, enable ? "enabled" : "disabled");
+        
+        // Add servo stop delay when disabling torque
+        if (!enable) {
+            vTaskDelay(pdMS_TO_TICKS(SERVO_STOP_DELAY));
+        }
+    } else {
+        ESP_LOGE(TAG, "Failed to %s torque for servo %d: %s", 
+                 enable ? "enable" : "disable", servo_id, esp_err_to_name(ret));
+        return ret;
     }
     
     return ESP_OK;

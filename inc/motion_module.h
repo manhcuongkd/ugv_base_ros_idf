@@ -107,6 +107,12 @@ esp_err_t motion_module_compute_pid(void);
 esp_err_t motion_module_apply_motor_control(void);
 
 /**
+ * @brief Test wheel rotation without UART commands
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t motion_module_test_wheels(void);
+
+/**
  * @brief Set motor speeds
  * @param left_speed Left motor speed (-1.0 to 1.0)
  * @param right_speed Right motor speed (-1.0 to 1.0)

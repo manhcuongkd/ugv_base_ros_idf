@@ -86,10 +86,10 @@ extern "C" void app_main(void)
     }
     
     // Create tasks
-    xTaskCreatePinnedToCore(main_task, "main_task", 8192, NULL, 5, &main_task_handle, 0);
-    xTaskCreatePinnedToCore(imu_task, "imu_task", 4096, NULL, 4, &imu_task_handle, 1);
-    xTaskCreatePinnedToCore(motion_task, "motion_task", 4096, NULL, 3, &motion_task_handle, 0);
-    xTaskCreatePinnedToCore(uart_task, "uart_task", 4096, NULL, 4, &uart_task_handle, 0);
+    xTaskCreatePinnedToCore(main_task, "main_task", 32768, NULL, 5, &main_task_handle, 0);
+    xTaskCreatePinnedToCore(imu_task, "imu_task", 6144, NULL, 4, &imu_task_handle, 1);
+    xTaskCreatePinnedToCore(motion_task, "motion_task", 6144, NULL, 3, &motion_task_handle, 0);
+    xTaskCreatePinnedToCore(uart_task, "uart_task", 8192, NULL, 4, &uart_task_handle, 0);
     
     ESP_LOGI(TAG, "RaspRover application started successfully");
 }
@@ -101,6 +101,10 @@ static void main_task(void *pvParameters)
     
     // Wait for system initialization
     wait_for_system_initialization();
+    
+    // Check stack usage after initialization
+    UBaseType_t stack_remaining = uxTaskGetStackHighWaterMark(NULL);
+    ESP_LOGI(TAG, "Main task stack remaining after init: %u bytes", stack_remaining * sizeof(StackType_t));
     
     // Display startup message
     oled_controller_display_text(0, "RaspRover IDF");
@@ -124,23 +128,13 @@ static void main_task(void *pvParameters)
             base_info_feedback();
         }
         
-        // Module type specific handling (matching Arduino implementation)
-        switch (ugv_config.module_type) {
-            case 1: // RoArm-M2
-                module_type_roarm_m2();
-                break;
-            case 2: // Gimbal
-                module_type_gimbal();
-                break;
-        }
-        
         // Heartbeat control
         heart_beat_ctrl();
         
         // Update OLED display (Arduino-style periodic update)
         oled_controller_info_update();
         
-        vTaskDelay(pdMS_TO_TICKS(50)); // 20Hz update rate
+        vTaskDelay(pdMS_TO_TICKS(1000)); // Standard main task frequency
     }
 }
 
@@ -167,8 +161,9 @@ static void imu_task(void *pvParameters)
         if (imu_controller_read_data(&imu_data) == ESP_OK) {
             // Process IMU data
             if (ugv_config.module_type == 2) { // Gimbal mode
-                // Apply gimbal stabilization
-                gimbal_controller_stabilize(&imu_data);
+                // Apply gimbal stabilization (only if gimbal is initialized)
+                // Note: Temporarily disabled to prevent log spam affecting motion control
+                // gimbal_controller_stabilize(&imu_data);
             }
         }
         

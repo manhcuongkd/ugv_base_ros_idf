@@ -67,8 +67,8 @@ extern "C" {
 
 // PWM configuration
 #define PWM_FREQ               5000
-#define PWM_RESOLUTION         LEDC_TIMER_13_BIT
-#define PWM_MAX_DUTY           8191
+#define PWM_RESOLUTION         LEDC_TIMER_8_BIT  // Arduino: ANALOG_WRITE_BITS = 8
+#define PWM_MAX_DUTY           255               // Arduino: MAX_PWM = 255
 
 // PID configuration
 #define PID_SAMPLE_TIME_MS     20
@@ -87,12 +87,15 @@ extern "C" {
 // PWM frequency (matching Arduino)
 #define PWM_FREQ_ARDUINO       100000  // 100kHz PWM frequency
 
-// PID constants (matching Arduino)
-#define PID_KP                 200.0f  // Proportional gain
-#define PID_KI                 2500.0f // Integral gain
-#define PID_KD                 0.0f    // Derivative gain
-#define PID_THRESHOLD_PWM      5       // Minimum PWM threshold
-#define PID_WINDUP_LIMITS      100.0f  // Integral windup limits
+// PID constants (tuned for higher speeds)
+#define PID_KP                 2.5f    // Proportional gain (higher for faster response)
+#define PID_KI                 25.0f   // Integral gain (moderate)
+#define PID_KD                 3.0f    // Derivative gain (moderate damping)
+#define PID_THRESHOLD_PWM      8       // Minimum PWM threshold
+#define PID_WINDUP_LIMITS      100.0f  // Integral windup limits (higher for fast speeds)
+
+// PWM smoothing for stable motion (very smooth for accurate control)
+#define PWM_SMOOTHING_FACTOR   0.20f   // Higher smoothing for more accurate speed control
 
 // IMU configuration (ICM20948)
 #define ICM20948_I2C_ADDR       0x68           // Default I2C address (AD0_VAL = 0)
