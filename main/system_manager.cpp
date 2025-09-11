@@ -130,13 +130,15 @@ esp_err_t system_manager_init_hardware(void)
     // Initialize LED controller
     ESP_ERROR_CHECK(led_controller_init());
     
-    // Temporarily disable servo and gimbal controllers for wheel testing
-    // ESP_ERROR_CHECK(servo_controller_init());
-    // esp_err_t gimbal_result = gimbal_controller_init();
-    // if (gimbal_result != ESP_OK) {
-    //     ESP_LOGW(TAG, "Gimbal controller initialization failed (%s), continuing without gimbal", esp_err_to_name(gimbal_result));
-    // }
-    ESP_LOGI(TAG, "Servo and gimbal controllers disabled for wheel testing");
+    // Initialize servo and gimbal controllers for API testing
+    ESP_LOGI(TAG, "Initializing servo and gimbal controllers...");
+    ESP_ERROR_CHECK(servo_controller_init());
+    esp_err_t gimbal_result = gimbal_controller_init();
+    if (gimbal_result != ESP_OK) {
+        ESP_LOGW(TAG, "Gimbal controller initialization failed (%s), continuing without gimbal", esp_err_to_name(gimbal_result));
+    } else {
+        ESP_LOGI(TAG, "✓ Gimbal controller initialized successfully");
+    }
     
     ESP_LOGI(TAG, "Hardware initialization completed");
     return ESP_OK;

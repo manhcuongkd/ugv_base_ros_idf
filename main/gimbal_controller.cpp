@@ -1,9 +1,11 @@
 #include "../inc/gimbal_controller.h"
 #include "../inc/servo_controller.h"
+#include "../inc/ugv_config.h"
 #include <esp_log.h>
 #include <esp_timer.h>
-#include <driver/ledc.h>
+// #include <driver/ledc.h>  // Removed PWM support
 #include <driver/gpio.h>
+#include <driver/uart.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
@@ -18,12 +20,8 @@ static const char *TAG = "Gimbal_Controller";
 #define GIMBAL_TASK_PRIORITY 4
 #define GIMBAL_QUEUE_SIZE 10
 
-// LEDC Configuration
-#define GIMBAL_LEDC_TIMER LEDC_TIMER_0
-#define GIMBAL_LEDC_MODE LEDC_LOW_SPEED_MODE
-#define GIMBAL_PAN_CHANNEL LEDC_CHANNEL_0
-#define GIMBAL_TILT_CHANNEL LEDC_CHANNEL_1
-// PWM resolution is defined in header
+// Gimbal servo communication via UART (SCServo protocol)
+// PWM implementation removed - using pure UART/SCServo communication
 
 // Global variables
 static bool gimbal_initialized = false;
@@ -38,6 +36,29 @@ static esp_err_t gimbal_set_tilt_angle(float angle);
 static uint16_t gimbal_angle_to_pulse(float angle, uint8_t axis);
 static float gimbal_pulse_to_angle(uint16_t pulse, uint8_t axis);
 static esp_err_t gimbal_apply_stabilization(void);
+static esp_err_t gimbal_scservo_send_packet_at_register(uint8_t id, uint8_t reg, uint8_t *params, uint8_t param_len);
+
+// SCServo protocol functions (Arduino-style implementation)
+static esp_err_t gimbal_scservo_sync_write_pos_ex(uint8_t *ids, uint8_t id_count, int16_t *positions, uint16_t *speeds, uint8_t *accs);
+static esp_err_t gimbal_scservo_write_pos_ex(uint8_t id, int16_t position, uint16_t speed, uint8_t acc);
+static esp_err_t gimbal_scservo_send_packet(uint8_t id, uint8_t cmd, uint8_t *params, uint8_t param_len);
+static uint8_t gimbal_scservo_calc_checksum(uint8_t *data, uint8_t len);
+
+// SCServo UART configuration (shared with servo_controller)
+#define SCSERVO_UART_NUM UART_NUM_1  // Use same UART as servo_controller
+#define SCSERVO_UART_TX_PIN SERVO_TXD  // GPIO 19
+#define SCSERVO_UART_RX_PIN SERVO_RXD  // GPIO 18
+#define SCSERVO_BAUD_RATE 1000000
+
+// SMS_STS protocol constants (matching Arduino SCServo library)
+#define SCSERVO_HEADER1 0xFF
+#define SCSERVO_HEADER2 0xFF
+#define SCSERVO_INST_SYNC_WRITE 0x83
+#define SCSERVO_INST_WRITE 0x03
+#define SMS_STS_ACC 41
+#define SMS_STS_GOAL_POSITION_L 42
+#define SMS_STS_GOAL_SPEED_L 46
+#define SMS_STS_TORQUE_ENABLE 40
 
 esp_err_t gimbal_controller_init(void)
 {
@@ -48,13 +69,17 @@ esp_err_t gimbal_controller_init(void)
 
     ESP_LOGI(TAG, "Initializing gimbal controller...");
 
+    // Note: UART is initialized by servo_controller, we just use the shared connection
+    // Verify UART is available (servo_controller should be initialized first)
+    esp_err_t ret = ESP_OK;
+
     // Initialize control structure
     memset(&gimbal_control, 0, sizeof(gimbal_control_t));
     gimbal_control.mode = GIMBAL_MODE_MANUAL;
-    gimbal_control.pan_position = GIMBAL_PAN_CENTER;
-    gimbal_control.tilt_position = GIMBAL_TILT_CENTER;
-    gimbal_control.pan_target = GIMBAL_PAN_CENTER;
-    gimbal_control.tilt_target = GIMBAL_TILT_CENTER;
+    gimbal_control.pan_position = 2047; // Arduino-style center
+    gimbal_control.tilt_position = 2047; // Arduino-style center
+    gimbal_control.pan_target = 2047;
+    gimbal_control.tilt_target = 2047;
     gimbal_control.pan_speed = 1.0f;
     gimbal_control.tilt_speed = 1.0f;
     gimbal_control.pan_acceleration = 1.0f;
@@ -63,56 +88,11 @@ esp_err_t gimbal_controller_init(void)
     gimbal_control.tilt_moving = false;
     gimbal_control.last_update_time = esp_timer_get_time() / 1000;
 
-    // Configure LEDC timer
-    ledc_timer_config_t ledc_timer = {
-        .speed_mode = GIMBAL_LEDC_MODE,
-        .duty_resolution = (ledc_timer_bit_t)GIMBAL_PWM_RESOLUTION,
-        .timer_num = GIMBAL_LEDC_TIMER,
-        .freq_hz = GIMBAL_PWM_FREQ,
-        .clk_cfg = LEDC_AUTO_CLK
-    };
+    // Note: UART initialization is handled by servo_controller
+    // Gimbal controller uses shared UART connection for SCServo communication
+    ESP_LOGI(TAG, "Using shared UART connection for SCServo communication");
 
-    esp_err_t ret = ledc_timer_config(&ledc_timer);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure LEDC timer: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    // Configure pan servo channel
-    ledc_channel_config_t pan_channel = {
-        .gpio_num = GIMBAL_PAN_PIN,
-        .speed_mode = GIMBAL_LEDC_MODE,
-        .channel = GIMBAL_PAN_CHANNEL,
-        .intr_type = LEDC_INTR_DISABLE,
-        .timer_sel = GIMBAL_LEDC_TIMER,
-        .duty = 0,
-        .hpoint = 0,
-        .flags = {0}
-    };
-
-    ret = ledc_channel_config(&pan_channel);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure pan channel: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    // Configure tilt servo channel
-    ledc_channel_config_t tilt_channel = {
-        .gpio_num = GIMBAL_TILT_PIN,
-        .speed_mode = GIMBAL_LEDC_MODE,
-        .channel = GIMBAL_TILT_CHANNEL,
-        .intr_type = LEDC_INTR_DISABLE,
-        .timer_sel = GIMBAL_LEDC_TIMER,
-        .duty = 0,
-        .hpoint = 0,
-        .flags = {0}
-    };
-
-    ret = ledc_channel_config(&tilt_channel);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure tilt channel: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    // No additional hardware initialization needed - using UART/SCServo protocol only
 
     // Create command queue
     gimbal_command_queue = xQueueCreate(GIMBAL_QUEUE_SIZE, sizeof(gimbal_command_t));
@@ -139,6 +119,27 @@ esp_err_t gimbal_controller_init(void)
 
     gimbal_initialized = true;
     ESP_LOGI(TAG, "Gimbal controller initialized successfully");
+
+    // Enable servo torque for both pan and tilt servos
+    ESP_LOGI(TAG, "Enabling servo torque for gimbal servos...");
+    esp_err_t torque_ret;
+    
+    torque_ret = scservo_enable_torque(GIMBAL_PAN_ID, 1);
+    if (torque_ret == ESP_OK) {
+        ESP_LOGI(TAG, "✓ Pan servo (ID %d) torque enabled", GIMBAL_PAN_ID);
+    } else {
+        ESP_LOGW(TAG, "⚠ Failed to enable pan servo torque: %s", esp_err_to_name(torque_ret));
+    }
+    
+    torque_ret = scservo_enable_torque(GIMBAL_TILT_ID, 1);
+    if (torque_ret == ESP_OK) {
+        ESP_LOGI(TAG, "✓ Tilt servo (ID %d) torque enabled", GIMBAL_TILT_ID);
+    } else {
+        ESP_LOGW(TAG, "⚠ Failed to enable tilt servo torque: %s", esp_err_to_name(torque_ret));
+    }
+    
+    // Give servos time to initialize after torque enable
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     // Center the gimbal after initialization
     ret = gimbal_controller_center();
@@ -168,9 +169,9 @@ esp_err_t gimbal_controller_deinit(void)
         gimbal_command_queue = NULL;
     }
 
-    // Stop servos
-    ledc_stop(GIMBAL_LEDC_MODE, GIMBAL_PAN_CHANNEL, 0);
-    ledc_stop(GIMBAL_LEDC_MODE, GIMBAL_TILT_CHANNEL, 0);
+    // Disable servo torque via SCServo protocol
+    gimbal_controller_set_torque(GIMBAL_PAN_ID, false);
+    gimbal_controller_set_torque(GIMBAL_TILT_ID, false);
 
     gimbal_initialized = false;
     ESP_LOGI(TAG, "Gimbal controller deinitialized");
@@ -195,11 +196,27 @@ esp_err_t gimbal_controller_set_mode(uint8_t mode)
 
 esp_err_t gimbal_controller_set_position(uint16_t pan, uint16_t tilt)
 {
-    // Validate input parameters
-    if (pan < GIMBAL_PAN_MIN || pan > GIMBAL_PAN_MAX ||
-        tilt < GIMBAL_TILT_MIN || tilt > GIMBAL_TILT_MAX) {
-        ESP_LOGE(TAG, "Invalid position: pan=%d, tilt=%d", pan, tilt);
-        return ESP_ERR_INVALID_ARG;
+    if (!gimbal_initialized) {
+        ESP_LOGE(TAG, "Gimbal controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Use Arduino-style sync write to control both servos simultaneously
+    uint8_t gimbal_ids[2] = {GIMBAL_PAN_ID, GIMBAL_TILT_ID};
+    int16_t gimbal_positions[2] = {(int16_t)pan, (int16_t)tilt};
+    uint16_t gimbal_speeds[2] = {
+        (uint16_t)(gimbal_control.pan_speed * 100),
+        (uint16_t)(gimbal_control.tilt_speed * 100)
+    };
+    uint8_t gimbal_accs[2] = {
+        (uint8_t)(gimbal_control.pan_acceleration * 10),
+        (uint8_t)(gimbal_control.tilt_acceleration * 10)
+    };
+
+    esp_err_t ret = gimbal_scservo_sync_write_pos_ex(gimbal_ids, 2, gimbal_positions, gimbal_speeds, gimbal_accs);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to sync write gimbal positions: %s", esp_err_to_name(ret));
+        return ret;
     }
 
     // Set target positions
@@ -207,19 +224,6 @@ esp_err_t gimbal_controller_set_position(uint16_t pan, uint16_t tilt)
     gimbal_control.tilt_target = tilt;
     gimbal_control.pan_moving = true;
     gimbal_control.tilt_moving = true;
-
-    // Apply PWM signals
-    esp_err_t ret = ledc_set_duty(GIMBAL_LEDC_MODE, GIMBAL_PAN_CHANNEL, pan);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set pan PWM: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    ret = ledc_set_duty(GIMBAL_LEDC_MODE, GIMBAL_TILT_CHANNEL, tilt);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set tilt PWM: %s", esp_err_to_name(ret));
-        return ret;
-    }
 
     // Update current positions
     gimbal_control.pan_position = pan;
@@ -232,12 +236,29 @@ esp_err_t gimbal_controller_set_position(uint16_t pan, uint16_t tilt)
 
 esp_err_t gimbal_controller_set_pan_tilt(float pan, float tilt)
 {
-    // Convert degrees to pulse width
-    uint16_t pan_pulse = gimbal_angle_to_pulse(pan, 0); // 0 for pan axis
-    uint16_t tilt_pulse = gimbal_angle_to_pulse(tilt, 1); // 1 for tilt axis
+    // Arduino-style position calculation matching gimbal_module.h with CORRECTED PAN DIRECTION
+    // Pan: constrain to -180..180, map to servo position
+    if (pan < -180.0f) pan = -180.0f;
+    if (pan > 180.0f) pan = 180.0f;
+    
+    // Tilt: constrain to -30..90, map to servo position  
+    if (tilt < -30.0f) tilt = -30.0f;
+    if (tilt > 90.0f) tilt = 90.0f;
+    
+    // Convert to Arduino-style servo positions with CORRECTED PAN DIRECTION
+    // Pan: 2047 + map(angle, 0, 360, 0, 4095) but REVERSED for correct LEFT/RIGHT
+    float normalized_pan = pan + 180.0f; // -180..180 -> 0..360
+    int16_t pan_pos = 2047 - (int16_t)((normalized_pan * 4095.0f) / 360.0f) + 2047; // REVERSED!
+    
+    // Tilt: 2047 - map(angle, 0, 360, 0, 4095) (inverted)
+    float normalized_tilt = tilt + 30.0f; // -30..90 -> 0..120
+    int16_t tilt_pos = 2047 - (int16_t)((normalized_tilt * 4095.0f) / 120.0f) + 2047;
+    
+    ESP_LOGI(TAG, "CORRECTED Pan/Tilt: pan_angle=%.1f -> pos=%d, tilt_angle=%.1f -> pos=%d", 
+             pan, pan_pos, tilt, tilt_pos);
     
     // Call the existing set_position function
-    return gimbal_controller_set_position(pan_pulse, tilt_pulse);
+    return gimbal_controller_set_position((uint16_t)pan_pos, (uint16_t)tilt_pos);
 }
 
 esp_err_t gimbal_controller_set_relative_position(int16_t pan_delta, int16_t tilt_delta)
@@ -302,7 +323,7 @@ esp_err_t gimbal_controller_center(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    return gimbal_controller_set_position(GIMBAL_PAN_CENTER, GIMBAL_TILT_CENTER);
+    return gimbal_controller_set_position(2047, 2047); // Arduino-style center position
 }
 
 esp_err_t gimbal_controller_set_speed(float pan_speed, float tilt_speed)
@@ -711,19 +732,20 @@ static esp_err_t gimbal_set_pan_angle(float angle)
         return ESP_ERR_INVALID_ARG;
     }
 
-    gimbal_control.pan_position = (uint16_t)angle;
-    uint16_t pulse = gimbal_angle_to_pulse(angle, 0);
+    // Convert angle to servo position using corrected pan direction
+    uint16_t servo_pos = gimbal_angle_to_pulse(angle, 0);
     
-    // Convert pulse width to duty cycle
-    uint32_t duty = (pulse * ((1 << GIMBAL_PWM_RESOLUTION) - 1)) / 20000; // 20ms period
-    
-    esp_err_t ret = ledc_set_duty(GIMBAL_LEDC_MODE, GIMBAL_PAN_CHANNEL, duty);
+    // Use SCServo protocol to set position
+    esp_err_t ret = gimbal_scservo_write_pos_ex(GIMBAL_PAN_ID, servo_pos, 
+                                                (uint16_t)(gimbal_control.pan_speed * 100), 
+                                                (uint8_t)(gimbal_control.pan_acceleration * 10));
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set pan duty: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to set pan position via SCServo: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    ESP_LOGD(TAG, "Pan servo set to %.1f degrees (pulse: %u)", angle, pulse);
+    gimbal_control.pan_position = servo_pos;
+    ESP_LOGD(TAG, "Pan servo set to %.1f degrees (position: %u)", angle, servo_pos);
     return ESP_OK;
 }
 
@@ -734,59 +756,72 @@ static esp_err_t gimbal_set_tilt_angle(float angle)
         return ESP_ERR_INVALID_ARG;
     }
 
-    gimbal_control.tilt_position = (uint16_t)angle;
-    uint16_t pulse = gimbal_angle_to_pulse(angle, 1);
+    // Convert angle to servo position
+    uint16_t servo_pos = gimbal_angle_to_pulse(angle, 1);
     
-    // Convert pulse width to duty cycle
-    uint32_t duty = (pulse * ((1 << GIMBAL_PWM_RESOLUTION) - 1)) / 20000; // 20ms period
-    
-    esp_err_t ret = ledc_set_duty(GIMBAL_LEDC_MODE, GIMBAL_TILT_CHANNEL, duty);
+    // Use SCServo protocol to set position
+    esp_err_t ret = gimbal_scservo_write_pos_ex(GIMBAL_TILT_ID, servo_pos, 
+                                                (uint16_t)(gimbal_control.tilt_speed * 100), 
+                                                (uint8_t)(gimbal_control.tilt_acceleration * 10));
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set tilt duty: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to set tilt position via SCServo: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    ESP_LOGD(TAG, "Tilt servo set to %.1f degrees (pulse: %u)", angle, pulse);
+    gimbal_control.tilt_position = servo_pos;
+    ESP_LOGD(TAG, "Tilt servo set to %.1f degrees (position: %u)", angle, servo_pos);
     return ESP_OK;
 }
 
 static uint16_t gimbal_angle_to_pulse(float angle, uint8_t axis)
 {
-    uint16_t min_pulse, max_pulse;
-    
-    if (axis == 0) { // Pan axis
-        min_pulse = GIMBAL_PAN_MIN;
-        max_pulse = GIMBAL_PAN_MAX;
-    } else { // Tilt axis
-        min_pulse = GIMBAL_TILT_MIN;
-        max_pulse = GIMBAL_TILT_MAX;
+    // Arduino-style servo position mapping with CORRECTED PAN DIRECTION
+    if (axis == 0) { // Pan axis with CORRECTED direction
+        // Convert angle (-180 to +180) to servo position (0 to 4095)
+        // CORRECTED: Negative angles (LEFT) -> Lower positions, Positive angles (RIGHT) -> Higher positions
+        float normalized_angle = (angle + 180.0f) / 360.0f; // -180..180 -> 0..1
+        uint16_t position = (uint16_t)(normalized_angle * 4095.0f);
+        
+        // Apply CORRECTION: Reverse the mapping so LEFT is lower values, RIGHT is higher values
+        position = 4095 - position;
+        
+        ESP_LOGD(TAG, "Pan angle %.1f -> normalized %.3f -> raw_pos %u -> corrected_pos %u", 
+                 angle, normalized_angle, (uint16_t)(normalized_angle * 4095.0f), position);
+        return position;
+    } else { // Tilt axis (unchanged)
+        // Convert angle (-90 to +90) to servo position (0 to 4095)
+        float normalized_angle = (angle + 90.0f) / 180.0f; // -90..90 -> 0..1
+        uint16_t position = (uint16_t)(normalized_angle * 4095.0f);
+        
+        ESP_LOGD(TAG, "Tilt angle %.1f -> normalized %.3f -> position %u", 
+                 angle, normalized_angle, position);
+        return position;
     }
-
-    // Convert angle to pulse width
-    // Assuming angle is in degrees from -90 to +90
-    float normalized_angle = (angle + 90.0f) / 180.0f; // 0.0 to 1.0
-    uint16_t pulse = min_pulse + (uint16_t)(normalized_angle * (max_pulse - min_pulse));
-    
-    return pulse;
 }
 
 static float gimbal_pulse_to_angle(uint16_t pulse, uint8_t axis)
 {
-    uint16_t min_pulse, max_pulse;
-    
-    if (axis == 0) { // Pan axis
-        min_pulse = GIMBAL_PAN_MIN;
-        max_pulse = GIMBAL_PAN_MAX;
-    } else { // Tilt axis
-        min_pulse = GIMBAL_TILT_MIN;
-        max_pulse = GIMBAL_TILT_MAX;
+    // Arduino-style servo position to angle conversion with CORRECTED PAN DIRECTION
+    if (axis == 0) { // Pan axis with CORRECTED direction
+        // Reverse the correction applied in gimbal_angle_to_pulse
+        uint16_t corrected_pulse = 4095 - pulse;
+        
+        // Convert servo position (0 to 4095) to angle (-180 to +180)
+        float normalized_pulse = (float)corrected_pulse / 4095.0f; // 0..1
+        float angle = (normalized_pulse * 360.0f) - 180.0f; // 0..1 -> -180..180
+        
+        ESP_LOGD(TAG, "Pan position %u -> corrected %u -> normalized %.3f -> angle %.1f", 
+                 pulse, corrected_pulse, normalized_pulse, angle);
+        return angle;
+    } else { // Tilt axis (unchanged)
+        // Convert servo position (0 to 4095) to angle (-90 to +90)
+        float normalized_pulse = (float)pulse / 4095.0f; // 0..1
+        float angle = (normalized_pulse * 180.0f) - 90.0f; // 0..1 -> -90..90
+        
+        ESP_LOGD(TAG, "Tilt position %u -> normalized %.3f -> angle %.1f", 
+                 pulse, normalized_pulse, angle);
+        return angle;
     }
-
-    // Convert pulse width to angle
-    float normalized_pulse = (float)(pulse - min_pulse) / (float)(max_pulse - min_pulse);
-    float angle = (normalized_pulse * 180.0f) - 90.0f; // -90 to +90 degrees
-    
-    return angle;
 }
 
 static esp_err_t gimbal_apply_stabilization(void)
@@ -910,7 +945,21 @@ esp_err_t gimbal_controller_get_feedback(gimbal_feedback_t *pan_fb, gimbal_feedb
     uint16_t pan_pos, pan_speed, pan_load;
     uint8_t pan_voltage, pan_temperature, pan_moving;
     
-    ret = scservo_read_pos(GIMBAL_PAN_ID, &pan_pos);
+    // Use Arduino-style FeedBack function for better compatibility
+    uint8_t pan_mem[15]; // SMS_STS feedback memory block
+    int pan_feedback_len = scservo_feedback(GIMBAL_PAN_ID, pan_mem);
+    ESP_LOGI(TAG, "scservo_feedback(PAN_ID=%d) returned: %d bytes", GIMBAL_PAN_ID, pan_feedback_len);
+    
+    if (pan_feedback_len > 0) {
+        // Parse feedback data like Arduino ReadPos function
+        // Position is at offset 0 and 1 in the memory block (register 56, 57)
+        pan_pos = pan_mem[0] | (pan_mem[1] << 8);
+        
+        ret = ESP_OK;
+    } else {
+        ret = ESP_FAIL;
+    }
+    
     if (ret == ESP_OK) {
         pan_fb->status = true;
         pan_fb->pos = pan_pos;
@@ -945,7 +994,21 @@ esp_err_t gimbal_controller_get_feedback(gimbal_feedback_t *pan_fb, gimbal_feedb
     uint16_t tilt_pos, tilt_speed, tilt_load;
     uint8_t tilt_voltage, tilt_temperature, tilt_moving;
     
-    ret = scservo_read_pos(GIMBAL_TILT_ID, &tilt_pos);
+    // Use Arduino-style FeedBack function for better compatibility  
+    uint8_t tilt_mem[15]; // SMS_STS feedback memory block
+    int tilt_feedback_len = scservo_feedback(GIMBAL_TILT_ID, tilt_mem);
+    ESP_LOGI(TAG, "scservo_feedback(TILT_ID=%d) returned: %d bytes", GIMBAL_TILT_ID, tilt_feedback_len);
+    
+    if (tilt_feedback_len > 0) {
+        // Parse feedback data like Arduino ReadPos function
+        // Position is at offset 0 and 1 in the memory block (register 56, 57)
+        tilt_pos = tilt_mem[0] | (tilt_mem[1] << 8);
+        
+        ret = ESP_OK;
+    } else {
+        ret = ESP_FAIL;
+    }
+    
     if (ret == ESP_OK) {
         tilt_fb->status = true;
         tilt_fb->pos = tilt_pos;
@@ -1100,3 +1163,234 @@ esp_err_t gimbal_controller_user_control(int8_t input_x, int8_t input_y, uint16_
              input_x, input_y, goal_x, goal_y);
     return ESP_OK;
 }
+
+// SCServo protocol implementation (Arduino-style)
+static esp_err_t gimbal_scservo_sync_write_pos_ex(uint8_t *ids, uint8_t id_count, int16_t *positions, uint16_t *speeds, uint8_t *accs)
+{
+    if (!ids || !positions || !speeds || !accs || id_count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // 🎯 EXACT Arduino SCServo library implementation!
+    
+    // Step 1: Prepare servo data buffer (Arduino-style)
+    uint8_t nLen = 7; // ACC(1) + Position(2) + Time(2) + Speed(2) per servo
+    uint8_t offbuf[7 * id_count]; // Data buffer for all servos
+    
+    for (uint8_t i = 0; i < id_count; i++) {
+        // Handle negative positions (Arduino-style from SMS_STS.cpp:57-60)
+        int16_t pos = positions[i];
+        if (pos < 0) {
+            pos = -pos;
+            pos |= (1 << 15);
+        }
+        
+        // Speed handling (Arduino-style from SMS_STS.cpp:61-66)
+        uint16_t V = speeds ? speeds[i] : 0;
+        
+        // ACC handling (Arduino-style from SMS_STS.cpp:67-71)
+        offbuf[i*7] = accs ? accs[i] : 0;
+        
+        // Host2SCS for Position (Arduino-style from SMS_STS.cpp:72)
+        // Note: End=0 (little endian), so DataL=low, DataH=high
+        offbuf[i*7+1] = pos & 0xFF;        // Position low byte
+        offbuf[i*7+2] = (pos >> 8) & 0xFF; // Position high byte
+        
+        // Host2SCS for Time = 0 (Arduino-style from SMS_STS.cpp:73)
+        offbuf[i*7+3] = 0; // Time low byte
+        offbuf[i*7+4] = 0; // Time high byte
+        
+        // Host2SCS for Speed (Arduino-style from SMS_STS.cpp:74)
+        offbuf[i*7+5] = V & 0xFF;        // Speed low byte
+        offbuf[i*7+6] = (V >> 8) & 0xFF; // Speed high byte
+    }
+    
+    // Step 2: Call syncWrite exactly like Arduino (SMS_STS.cpp:76)
+    // syncWrite(ID, IDN, SMS_STS_ACC, offbuf, 7);
+    
+    // Arduino syncWrite implementation (SCS.cpp:123-150)
+    uint8_t mesLen = ((nLen + 1) * id_count + 4); // Arduino SCS.cpp:126
+    uint8_t packet[256];
+    uint8_t packet_len = 0;
+    
+    // Header (Arduino SCS.cpp:128-136)
+    packet[packet_len++] = 0xFF;           // bBuf[0]
+    packet[packet_len++] = 0xFF;           // bBuf[1]  
+    packet[packet_len++] = 0xFE;           // bBuf[2] (broadcast)
+    packet[packet_len++] = mesLen;         // bBuf[3]
+    packet[packet_len++] = 0x83;           // bBuf[4] INST_SYNC_WRITE
+    packet[packet_len++] = SMS_STS_ACC;    // bBuf[5] MemAddr = 41
+    packet[packet_len++] = nLen;           // bBuf[6] = 7
+    
+    // Checksum calculation (Arduino SCS.cpp:138)
+    uint8_t Sum = 0xFE + mesLen + 0x83 + SMS_STS_ACC + nLen;
+    
+    // Servo data (Arduino SCS.cpp:140-147)
+    for (uint8_t i = 0; i < id_count; i++) {
+        // Write ID (Arduino SCS.cpp:141)
+        packet[packet_len++] = ids[i];
+        Sum += ids[i];
+        
+        // Write nLen bytes of data (Arduino SCS.cpp:142)
+        for (uint8_t j = 0; j < nLen; j++) {
+            packet[packet_len++] = offbuf[i*nLen + j];
+            Sum += offbuf[i*nLen + j]; // Arduino SCS.cpp:145
+        }
+    }
+    
+    // Checksum (Arduino SCS.cpp:148)
+    packet[packet_len++] = ~Sum;
+    
+    ESP_LOGI(TAG, "📡 ARDUINO-EXACT SYNC WRITE PACKET:");
+    ESP_LOGI(TAG, "   Servo count: %d, Register: %d, Data per servo: %d", id_count, SMS_STS_ACC, nLen);
+    char hex_str[512] = "";
+    for (int i = 0; i < packet_len; i++) {
+        char temp[8];
+        snprintf(temp, sizeof(temp), "%02X ", packet[i]);
+        strcat(hex_str, temp);
+    }
+    ESP_LOGI(TAG, "   Raw bytes: %s", hex_str);
+    ESP_LOGI(TAG, "   Packet length: %d bytes", packet_len);
+    
+    // Send packet via UART
+    int bytes_written = uart_write_bytes(SCSERVO_UART_NUM, packet, packet_len);
+    if (bytes_written != packet_len) {
+        ESP_LOGE(TAG, "❌ UART sync write failed: expected %d, written %d", packet_len, bytes_written);
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "✅ ARDUINO-EXACT packet sent successfully (%d bytes)", bytes_written);
+    
+    // Small delay for servo processing
+    vTaskDelay(pdMS_TO_TICKS(10));
+    
+    return ESP_OK;
+}
+
+static esp_err_t gimbal_scservo_write_pos_ex(uint8_t id, int16_t position, uint16_t speed, uint8_t acc)
+{
+    // SMS_STS write position with speed and acceleration (Arduino-compatible format)
+    uint8_t params[7];
+    
+    // SMS_STS format: ACC(1) + Position(2) + Time(2) + Speed(2)
+    // Acceleration (1 byte) - at register SMS_STS_ACC (41)
+    params[0] = acc;
+    
+    // Position (2 bytes, little endian) - at register SMS_STS_GOAL_POSITION_L (42)
+    params[1] = position & 0xFF;
+    params[2] = (position >> 8) & 0xFF;
+    
+    // Time (2 bytes, not used in this implementation, set to 0) - at register SMS_STS_GOAL_TIME_L (44)
+    params[3] = 0;
+    params[4] = 0;
+    
+    // Speed (2 bytes, little endian) - at register SMS_STS_GOAL_SPEED_L (46)
+    params[5] = speed & 0xFF;
+    params[6] = (speed >> 8) & 0xFF;
+    
+    // Send packet starting at SMS_STS_ACC register (41)
+    return gimbal_scservo_send_packet_at_register(id, SMS_STS_ACC, params, 7);
+}
+
+static esp_err_t gimbal_scservo_send_packet_at_register(uint8_t id, uint8_t reg, uint8_t *params, uint8_t param_len)
+{
+    // Build packet for writing to specific register: [0xFF] [0xFF] [ID] [LEN] [INST_WRITE] [REG] [PARAMS...] [CHECKSUM]
+    uint8_t packet[256];
+    uint8_t packet_len = 0;
+    
+    packet[packet_len++] = SCSERVO_HEADER1;
+    packet[packet_len++] = SCSERVO_HEADER2;
+    packet[packet_len++] = id;
+    packet[packet_len++] = param_len + 3; // Length = reg + params + checksum
+    packet[packet_len++] = SCSERVO_INST_WRITE;
+    packet[packet_len++] = reg; // Register address
+    
+    // Add parameters
+    for (uint8_t i = 0; i < param_len; i++) {
+        packet[packet_len++] = params[i];
+    }
+    
+    // Calculate and add checksum
+    uint8_t checksum = gimbal_scservo_calc_checksum(&packet[2], packet_len - 2);
+    packet[packet_len++] = ~checksum; // Inverted checksum
+    
+    // Log the exact packet being sent (for debugging)
+    ESP_LOGI(TAG, "📡 SENDING SMS_STS PACKET:");
+    ESP_LOGI(TAG, "   Target: Servo ID %d, Register %d", id, reg);
+    char hex_str[256] = "";
+    for (int i = 0; i < packet_len; i++) {
+        char temp[8];
+        snprintf(temp, sizeof(temp), "%02X ", packet[i]);
+        strcat(hex_str, temp);
+    }
+    ESP_LOGI(TAG, "   Raw bytes: %s", hex_str);
+    ESP_LOGI(TAG, "   Packet length: %d bytes", packet_len);
+    
+    // Send packet via UART
+    int bytes_written = uart_write_bytes(SCSERVO_UART_NUM, packet, packet_len);
+    if (bytes_written != packet_len) {
+        ESP_LOGE(TAG, "❌ UART write failed: expected %d, written %d", packet_len, bytes_written);
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "✅ UART packet sent successfully (%d bytes)", bytes_written);
+    
+    // Add a small delay and try to read any response
+    vTaskDelay(pdMS_TO_TICKS(10));
+    uint8_t response[64];
+    int bytes_read = uart_read_bytes(SCSERVO_UART_NUM, response, sizeof(response), pdMS_TO_TICKS(50));
+    if (bytes_read > 0) {
+        char resp_hex[256] = "";
+        for (int i = 0; i < bytes_read; i++) {
+            char temp[8];
+            snprintf(temp, sizeof(temp), "%02X ", response[i]);
+            strcat(resp_hex, temp);
+        }
+        ESP_LOGI(TAG, "📨 Servo response (%d bytes): %s", bytes_read, resp_hex);
+    } else {
+        ESP_LOGW(TAG, "⚠️ No response from servo ID %d", id);
+    }
+    return ESP_OK;
+}
+
+static esp_err_t gimbal_scservo_send_packet(uint8_t id, uint8_t cmd, uint8_t *params, uint8_t param_len)
+{
+    uint8_t packet[256];
+    uint8_t packet_len = 0;
+    
+    // Build packet: [0xFF] [0xFF] [ID] [LEN] [CMD] [PARAMS...] [CHECKSUM]
+    packet[packet_len++] = SCSERVO_HEADER1;
+    packet[packet_len++] = SCSERVO_HEADER2;
+    packet[packet_len++] = id;
+    packet[packet_len++] = param_len + 2; // Length = params + cmd + checksum
+    packet[packet_len++] = cmd;
+    
+    // Add parameters
+    for (uint8_t i = 0; i < param_len; i++) {
+        packet[packet_len++] = params[i];
+    }
+    
+    // Calculate and add checksum
+    uint8_t checksum = gimbal_scservo_calc_checksum(&packet[2], packet_len - 2); // From ID to last param
+    packet[packet_len++] = ~checksum; // Inverted checksum
+    
+    // Send packet via UART
+    int bytes_written = uart_write_bytes(SCSERVO_UART_NUM, packet, packet_len);
+    if (bytes_written != packet_len) {
+        ESP_LOGE(TAG, "UART write failed: expected %d, written %d", packet_len, bytes_written);
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGD(TAG, "Sent SCServo packet: ID=%d, CMD=0x%02X, LEN=%d", id, cmd, param_len);
+    return ESP_OK;
+}
+
+static uint8_t gimbal_scservo_calc_checksum(uint8_t *data, uint8_t len)
+{
+    uint8_t checksum = 0;
+    for (uint8_t i = 0; i < len; i++) {
+        checksum += data[i];
+    }
+    return checksum;
+}
+
