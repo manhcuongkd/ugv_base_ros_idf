@@ -26,43 +26,78 @@ extern "C" {
 #define INST_SYNC_WRITE 0x83
 #define INST_BULK_READ 0x92
 
+// Hardware Configuration
+#define SERVO_UART_NUM                  UART_NUM_1
+#define SERVO_UART_TX_PIN               GPIO_NUM_19
+#define SERVO_UART_RX_PIN               GPIO_NUM_18  
+#define SERVO_UART_BAUD_RATE            1000000
+
+// Servo Configuration
+#define MAX_SERVOS                      5
+#define ARM_SERVO_MIDDLE_POS            2047
+#define ARM_SERVO_POS_RANGE             4096
+#define ARM_SERVO_INIT_SPEED            600
+#define ARM_SERVO_INIT_ACC              20
+
+// Servo IDs
+#define BASE_SERVO_ID                   11
+#define SHOULDER_DRIVING_SERVO_ID       12
+#define SHOULDER_DRIVEN_SERVO_ID        13
+#define ELBOW_SERVO_ID                  14
+#define GRIPPER_SERVO_ID                15
+
+// Joint Constants  
+#define BASE_JOINT                      1
+#define SHOULDER_JOINT                  2
+#define ELBOW_JOINT                     3
+#define EOAT_JOINT                      4
+
+// Arm Dimensions (from Arduino config)
+#define ARM_L1_LENGTH_MM                126.06
+#define ARM_L2_LENGTH_MM_A              236.82
+#define ARM_L2_LENGTH_MM_B              30.00
+#define ARM_L3_LENGTH_MM_A_0            280.15
+#define ARM_L3_LENGTH_MM_B_0            1.73
+#define ARM_L4_LENGTH_MM_A              67.85
+#define ARM_L4_LENGTH_MM_B              5.98
+
 // SCServo Memory Map (SCSCL Registers)
 //-------EPROM(只读)--------
-#define SCSCL_VERSION_L 3
-#define SCSCL_VERSION_H 4
+#define SCSCL_VERSION_L                 3
+#define SCSCL_VERSION_H                 4
 
 //-------EPROM(读写)--------
-#define SCSCL_ID 5
-#define SCSCL_BAUD_RATE 6
-#define SCSCL_MIN_ANGLE_LIMIT_L 9
-#define SCSCL_MIN_ANGLE_LIMIT_H 10
-#define SCSCL_MAX_ANGLE_LIMIT_L 11
-#define SCSCL_MAX_ANGLE_LIMIT_H 12
-#define SCSCL_CW_DEAD 26
-#define SCSCL_CCW_DEAD 27
+#define SCSCL_ID                        5
+#define SCSCL_BAUD_RATE                 6
+#define SCSCL_MIN_ANGLE_LIMIT_L         9
+#define SCSCL_MIN_ANGLE_LIMIT_H         10
+#define SCSCL_MAX_ANGLE_LIMIT_L         11
+#define SCSCL_MAX_ANGLE_LIMIT_H         12
+#define SCSCL_CW_DEAD                   26
+#define SCSCL_CCW_DEAD                  27
 
 //-------SRAM(读写)--------
-#define SCSCL_TORQUE_ENABLE 40
-#define SCSCL_GOAL_POSITION_L 42
-#define SCSCL_GOAL_POSITION_H 43
-#define SCSCL_GOAL_TIME_L 44
-#define SCSCL_GOAL_TIME_H 45
-#define SCSCL_GOAL_SPEED_L 46
-#define SCSCL_GOAL_SPEED_H 47
-#define SCSCL_LOCK 48
+#define SCSCL_TORQUE_ENABLE             40
+#define SCSCL_GOAL_POSITION_L           42
+#define SCSCL_GOAL_POSITION_H           43
+#define SCSCL_GOAL_TIME_L               44
+#define SCSCL_GOAL_TIME_H               45
+#define SCSCL_GOAL_SPEED_L              46
+#define SCSCL_GOAL_SPEED_H              47
+#define SCSCL_LOCK                      48
 
 //-------SRAM(只读)--------
-#define SCSCL_PRESENT_POSITION_L 56
-#define SCSCL_PRESENT_POSITION_H 57
-#define SCSCL_PRESENT_SPEED_L 58
-#define SCSCL_PRESENT_SPEED_H 59
-#define SCSCL_PRESENT_LOAD_L 60
-#define SCSCL_PRESENT_LOAD_H 61
-#define SCSCL_PRESENT_VOLTAGE 62
-#define SCSCL_PRESENT_TEMPERATURE 63
-#define SCSCL_MOVING 66
-#define SCSCL_PRESENT_CURRENT_L 69
-#define SCSCL_PRESENT_CURRENT_H 70
+#define SCSCL_PRESENT_POSITION_L        56
+#define SCSCL_PRESENT_POSITION_H        57
+#define SCSCL_PRESENT_SPEED_L           58
+#define SCSCL_PRESENT_SPEED_H           59
+#define SCSCL_PRESENT_LOAD_L            60
+#define SCSCL_PRESENT_LOAD_H            61
+#define SCSCL_PRESENT_VOLTAGE           62
+#define SCSCL_PRESENT_TEMPERATURE       63
+#define SCSCL_MOVING                    66
+#define SCSCL_PRESENT_CURRENT_L         69
+#define SCSCL_PRESENT_CURRENT_H         70
 
 // Servo status
 typedef enum {

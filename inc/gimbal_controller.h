@@ -27,6 +27,48 @@
 #define GIMBAL_SERVO_BAUD_RATE 1000000  // Servo communication baud rate
 #define GIMBAL_SERVO_TIMEOUT 100        // Servo communication timeout (ms)
 
+// Task Configuration
+#define GIMBAL_UPDATE_RATE_HZ           50      // Gimbal control loop frequency
+#define GIMBAL_TASK_STACK_SIZE          4096    // Gimbal task stack size
+#define GIMBAL_TASK_PRIORITY            4       // Gimbal task priority
+#define GIMBAL_QUEUE_SIZE               10      // Command queue size
+
+// Position Constants
+#define GIMBAL_CENTER_POSITION          2047    // Center position for both axes
+#define GIMBAL_LEFT_POSITION            1400    // Pan left position
+#define GIMBAL_RIGHT_POSITION           2600    // Pan right position  
+#define GIMBAL_UP_POSITION              1400    // Tilt up position
+#define GIMBAL_DOWN_POSITION            2600    // Tilt down position
+
+// Speed and Acceleration Limits
+#define GIMBAL_MIN_SPEED                0.1f    // Minimum speed value
+#define GIMBAL_MAX_SPEED                10.0f   // Maximum speed value
+#define GIMBAL_MIN_ACCELERATION         0.1f    // Minimum acceleration value
+#define GIMBAL_MAX_ACCELERATION         10.0f   // Maximum acceleration value
+
+// Stabilization Parameters
+#define GIMBAL_STABILIZATION_THRESHOLD  1.0f    // Minimum compensation to apply
+#define GIMBAL_GYRO_COMPENSATION_GAIN   0.1f    // Gyroscope compensation gain
+
+// SCServo Protocol Constants
+#define SCSERVO_UART_NUM                UART_NUM_1  // UART port for servo communication
+#define SCSERVO_BAUD_RATE               1000000     // Servo communication baud rate
+#define SCSERVO_HEADER1                 0xFF        // Protocol header byte 1
+#define SCSERVO_HEADER2                 0xFF        // Protocol header byte 2
+#define SCSERVO_INST_SYNC_WRITE         0x83        // Sync write instruction
+#define SCSERVO_BROADCAST_ID            0xFE        // Broadcast ID for multiple servos
+#define SMS_STS_ACC_REGISTER            41          // Acceleration register address
+#define SCSERVO_DATA_LENGTH_PER_SERVO   7           // Data bytes per servo in sync write
+
+// Angle Conversion Constants
+#define PAN_ANGLE_MIN                   -180.0f     // Pan minimum angle (degrees)
+#define PAN_ANGLE_MAX                   180.0f      // Pan maximum angle (degrees)
+#define TILT_ANGLE_MIN                  -30.0f      // Tilt minimum angle (degrees)
+#define TILT_ANGLE_MAX                  90.0f       // Tilt maximum angle (degrees)
+#define SERVO_POSITION_RANGE            4095.0f     // Servo position range (0-4095)
+#define PAN_ANGLE_RANGE                 360.0f      // Pan angle range (degrees)
+#define TILT_ANGLE_RANGE                120.0f      // Tilt angle range (degrees)
+
 // Gimbal Control Modes
 #define GIMBAL_MODE_MANUAL 0
 #define GIMBAL_MODE_AUTO 1

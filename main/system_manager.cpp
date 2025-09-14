@@ -130,9 +130,11 @@ esp_err_t system_manager_init_hardware(void)
     // Initialize LED controller
     ESP_ERROR_CHECK(led_controller_init());
     
-    // Initialize servo and gimbal controllers for API testing
-    ESP_LOGI(TAG, "Initializing servo and gimbal controllers...");
+    // Initialize servo controller (required for UART communication)
+    ESP_LOGI(TAG, "Initializing servo controller for gimbal API...");
     ESP_ERROR_CHECK(servo_controller_init());
+    
+    // Initialize gimbal controller (non-critical - continue even if failed)
     esp_err_t gimbal_result = gimbal_controller_init();
     if (gimbal_result != ESP_OK) {
         ESP_LOGW(TAG, "Gimbal controller initialization failed (%s), continuing without gimbal", esp_err_to_name(gimbal_result));
