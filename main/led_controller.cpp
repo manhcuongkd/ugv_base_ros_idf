@@ -9,20 +9,6 @@
 
 static const char *TAG = "LEDController";
 
-// LED pins - Arduino compatible
-#define LED_IO4_PIN GPIO_NUM_4
-#define LED_IO5_PIN GPIO_NUM_5
-
-// RGB LED pins (for advanced features)
-#define LED_RED_PIN GPIO_NUM_25
-#define LED_GREEN_PIN GPIO_NUM_26
-#define LED_BLUE_PIN GPIO_NUM_27
-
-// PWM configuration - Arduino compatible
-#define LED_PWM_FREQ_HZ 200  // Match Arduino FREQ
-#define LED_PWM_RESOLUTION LEDC_TIMER_8_BIT  // Match Arduino ANALOG_WRITE_BITS
-#define LED_PWM_TIMER LEDC_TIMER_1
-
 // Arduino compatibility mode (currently always enabled)
 // static bool arduino_compat_mode = true;
 

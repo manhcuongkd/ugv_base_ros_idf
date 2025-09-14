@@ -8,11 +8,13 @@
 #include <cJSON.h>
 
 // File System Configuration
-#define MAX_FILE_NAME_LEN 64
-#define MAX_FILE_CONTENT_LEN 2048
-#define MAX_MISSION_NAME_LEN 32
-#define MAX_MISSION_CMD_LEN 256
-#define MAX_MISSIONS 20
+#define MAX_FILE_NAME_LEN               64
+#define MAX_FILE_CONTENT_LEN            2048
+#define MAX_MISSION_NAME_LEN            32
+#define MAX_MISSION_CMD_LEN             256
+#define MAX_MISSIONS                    20
+#define SPIFFS_MAX_PATH_LEN             64
+#define SPIFFS_MAX_FILE_SIZE            4096
 
 // Mission Structure
 typedef struct {

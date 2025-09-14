@@ -12,13 +12,6 @@
 
 static const char *TAG = "ESP_NOW_Controller";
 
-// ESP-NOW Configuration
-// Channel is defined in header
-#define ESP_NOW_MAX_PEERS 10
-#define ESP_NOW_QUEUE_SIZE 10
-#define ESP_NOW_TASK_STACK_SIZE 4096
-#define ESP_NOW_FLOW_CONTROL_INTERVAL 1000 // ms
-
 // Global variables
 static bool esp_now_initialized = false;
 static esp_now_control_t esp_now_control;
@@ -50,13 +43,17 @@ esp_err_t esp_now_controller_init(void)
     }
 
     // Initialize WiFi in AP mode for ESP-NOW
-    wifi_config_t ap_config = {0};
+    wifi_config_t ap_config = {};
     strcpy((char*)ap_config.ap.ssid, "RaspRover_ESP_NOW");
     strcpy((char*)ap_config.ap.password, "12345678");
+    ap_config.ap.ssid_len = strlen("RaspRover_ESP_NOW");
     ap_config.ap.channel = ESP_NOW_CHANNEL;
     ap_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    ap_config.ap.ssid_hidden = 0;
     ap_config.ap.max_connection = 4;
     ap_config.ap.beacon_interval = 100;
+    ap_config.ap.pairwise_cipher = WIFI_CIPHER_TYPE_CCMP;
+    ap_config.ap.ftm_responder = false;
 
     ret = esp_wifi_set_mode(WIFI_MODE_AP);
     if (ret != ESP_OK) {
@@ -108,6 +105,7 @@ esp_err_t esp_now_controller_init(void)
     esp_now_control.mode = ESP_NOW_MODE_NONE;
     esp_now_control.follower_count = 0;
     esp_now_control.flow_control_interval_ms = ESP_NOW_FLOW_CONTROL_INTERVAL;
+    esp_now_control.ctrl_by_broadcast = true;  // Arduino default
 
     // Mark as initialized before creating tasks (prevents timing errors)
     esp_now_initialized = true;
@@ -207,7 +205,8 @@ esp_err_t esp_now_controller_add_peer(const uint8_t *mac_addr)
         return ESP_ERR_NO_MEM;
     }
 
-    esp_now_peer_info_t peer_info = {0};
+    esp_now_peer_info_t peer_info = {};
+    memset(&peer_info, 0, sizeof(peer_info));
     memcpy(peer_info.peer_addr, mac_addr, 6);
     peer_info.channel = ESP_NOW_CHANNEL;
     peer_info.encrypt = false;
@@ -359,7 +358,8 @@ esp_err_t esp_now_controller_send_json_command(const char *json_cmd)
     }
 
     // Create message structure
-    esp_now_message_t msg = {0};
+    esp_now_message_t msg = {};
+    memset(&msg, 0, sizeof(msg));
     
     // Extract values from JSON
     cJSON *dev_code_item = cJSON_GetObjectItem(json, "dev_code");
@@ -493,6 +493,31 @@ void esp_now_controller_on_data_recv(const uint8_t *mac_addr, const uint8_t *dat
     // Parse received message
     const esp_now_message_t *msg = (const esp_now_message_t *)data;
     
+    // Arduino compatibility: Only process if in follower mode
+    if (esp_now_control.mode != ESP_NOW_MODE_FOLLOWER) {
+        return;
+    }
+    
+    // Send receive feedback for command 3 (Arduino compatibility)
+    if (msg->cmd == 3) {
+        char mac_str[18];
+        char *mac_string = esp_now_mac_to_string(mac_addr);
+        if (mac_string) {
+            strncpy(mac_str, mac_string, 18);
+            mac_str[17] = '\0';
+            free(mac_string);
+            
+            esp_now_controller_send_json_feedback(CMD_ESP_NOW_RECV, 0, msg->message, mac_str);
+        }
+    }
+    
+    // Arduino compatibility: Check broadcast control and whitelist
+    if (!esp_now_control.ctrl_by_broadcast) {
+        if (memcmp(mac_addr, esp_now_control.mac_whitelist_broadcast, 6) != 0) {
+            return;
+        }
+    }
+    
     ESP_LOGI(TAG, "Received ESP-NOW message: dev_code=%d, base=%.2f, shoulder=%.2f, elbow=%.2f, hand=%.2f, cmd=%d",
              msg->dev_code, msg->base, msg->shoulder, msg->elbow, msg->hand, msg->cmd);
 
@@ -513,22 +538,32 @@ void esp_now_controller_task(void *pvParameters)
         if (xQueueReceive(esp_now_queue, &msg, pdMS_TO_TICKS(1000)) == pdTRUE) {
             ESP_LOGI(TAG, "Processing message: dev_code=%d, cmd=%d", msg.dev_code, msg.cmd);
             
-            // Process message based on command type
+            // Process message based on command type (Arduino compatible)
             switch (msg.cmd) {
-                case 0: // No command
+                case 0: {
+                    // All joint absolute control (Arduino compatibility)
+                    ESP_LOGI(TAG, "RoArm joint control: base=%.2f, shoulder=%.2f, elbow=%.2f, hand=%.2f", 
+                             msg.base, msg.shoulder, msg.elbow, msg.hand);
+                    // TODO: Call RoArmM2_allJointAbsCtrl(msg.base, msg.shoulder, msg.elbow, msg.hand, 0, 0);
                     break;
-                case 1: // Move base
-                    ESP_LOGI(TAG, "Moving base to %.2f", msg.base);
+                }
+                case 1: {
+                    // JSON command processing (Arduino compatibility)
+                    ESP_LOGI(TAG, "Processing JSON command: %s", msg.message);
+                    // TODO: Call jsonCmdReceiveHandler();
                     break;
-                case 2: // Move shoulder
-                    ESP_LOGI(TAG, "Moving shoulder to %.2f", msg.shoulder);
+                }
+                case 2: {
+                    // JSON command with immediate execution (Arduino compatibility)
+                    ESP_LOGI(TAG, "Processing immediate JSON command: %s", msg.message);
+                    // TODO: Set runNewJsonCmd = true;
                     break;
-                case 3: // Move elbow
-                    ESP_LOGI(TAG, "Moving elbow to %.2f", msg.elbow);
+                }
+                case 3: {
+                    // Message command (already handled in receive callback)
+                    ESP_LOGI(TAG, "Message command: %s", msg.message);
                     break;
-                case 4: // Move hand
-                    ESP_LOGI(TAG, "Moving hand to %.2f", msg.hand);
-                    break;
+                }
                 default:
                     ESP_LOGW(TAG, "Unknown command: %d", msg.cmd);
                     break;
@@ -547,7 +582,8 @@ void esp_now_controller_flow_control_task(void *pvParameters)
     while (1) {
         // Send flow control message periodically
         if (esp_now_control.flow_control_interval_ms > 0) {
-            esp_now_message_t flow_msg = {0};
+            esp_now_message_t flow_msg = {};
+            memset(&flow_msg, 0, sizeof(flow_msg));
             flow_msg.cmd = 255; // Flow control command
             strcpy(flow_msg.message, "FLOW_CONTROL");
             
@@ -738,4 +774,370 @@ char* esp_now_mac_to_string(const uint8_t *mac) {
     
     ESP_LOGI(TAG, "MAC string created: %s", mac_string);
     return mac_string;
+}
+
+// ===== ARDUINO-COMPATIBLE API IMPLEMENTATION =====
+
+/**
+ * @brief Change ESP-NOW mode (Arduino compatible)
+ * @param input_mode Mode to set (0=none, 1=flow-leader-group, 2=flow-leader-single, 3=follower)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_change_mode(uint8_t input_mode) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_now_control.mode = input_mode;
+    
+    const char *mode_names[] = {"none", "flow-leader(group)", "flow-leader(single)", "follower"};
+    // mode_displays for future OLED integration
+    // const char *mode_displays[] = {"ESP-NOW: NONE", "ESP-NOW: F-LEADER-B", "ESP-NOW: F-LEADER-S", "ESP-NOW: > FOLLOWER <"};
+    
+    if (input_mode <= 3) {
+        ESP_LOGI(TAG, "ESP-NOW mode: %s", mode_names[input_mode]);
+        
+        // Send JSON feedback (Arduino compatibility)
+        esp_now_controller_send_info_feedback(mode_names[input_mode]);
+        
+        // TODO: Update OLED display
+        // screenLine_3 = mode_displays[input_mode];
+        // oled_update();
+    }
+    
+    if (input_mode == ESP_NOW_MODE_FLOW_LEADER_GROUP || input_mode == ESP_NOW_MODE_FLOW_LEADER_SINGLE) {
+        esp_now_control.current_message.cmd = 0;
+    }
+    
+    return ESP_OK;
+}
+
+/**
+ * @brief Register new follower to peer (Arduino compatible)
+ * @param input_mac MAC address string in format "XX:XX:XX:XX:XX:XX"
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_register_new_follower(const char *input_mac) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (!input_mac || strlen(input_mac) != 17) {
+        esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, 3, "invalid MAC address format.", NULL);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    uint8_t mac_array[6];
+    esp_err_t ret = esp_now_string_to_mac(input_mac, mac_array);
+    if (ret != ESP_OK) {
+        esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, 3, "invalid MAC address format.", NULL);
+        return ret;
+    }
+    
+    // Store as single follower device (Arduino compatibility)
+    memcpy(esp_now_control.single_follower_dev, mac_array, 6);
+    
+    ret = esp_now_controller_add_peer(mac_array);
+    if (ret != ESP_OK) {
+        esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, 4, "Failed to add peer.", input_mac);
+        return ret;
+    }
+    
+    esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, 5, "add peer.", input_mac);
+    return ESP_OK;
+}
+
+/**
+ * @brief Delete follower (Arduino compatible)
+ * @param input_mac MAC address string to remove
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_delete_follower(const char *input_mac) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (!input_mac || strlen(input_mac) != 17) {
+        esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, 3, "invalid MAC address format.", NULL);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    uint8_t mac_array[6];
+    esp_err_t ret = esp_now_string_to_mac(input_mac, mac_array);
+    if (ret != ESP_OK) {
+        esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, 3, "invalid MAC address format.", NULL);
+        return ret;
+    }
+    
+    ret = esp_now_controller_remove_peer(mac_array);
+    esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, 6, "delete peer.", input_mac);
+    
+    return ESP_OK;
+}
+
+/**
+ * @brief Send message to group (Arduino compatible)
+ * @param dev_code Device code
+ * @param b Base value
+ * @param s Shoulder value
+ * @param e Elbow value
+ * @param h Hand value
+ * @param cmd Command code
+ * @param message Message string
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_group_send(uint8_t dev_code, float b, float s, float e, float h, uint8_t cmd, const char *message) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    esp_now_message_t msg = {};
+    memset(&msg, 0, sizeof(msg));
+    
+    msg.dev_code = dev_code;
+    msg.base = b;
+    msg.shoulder = s;
+    msg.elbow = e;
+    msg.hand = h;
+    msg.cmd = cmd;
+    
+    if (message) {
+        strncpy(msg.message, message, sizeof(msg.message) - 1);
+        msg.message[sizeof(msg.message) - 1] = '\0';
+    }
+    
+    esp_err_t ret = esp_now_controller_broadcast_data((uint8_t*)&msg, sizeof(esp_now_message_t));
+    int status = (ret == ESP_OK) ? 8 : 7;
+    const char *status_msg = (ret == ESP_OK) ? "sent with success." : "error sending the data.";
+    
+    esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, status, status_msg, NULL);
+    
+    return ret;
+}
+
+/**
+ * @brief Send message to single device (Arduino compatible)
+ * @param input_mac Target MAC address
+ * @param dev_code Device code
+ * @param b Base value
+ * @param s Shoulder value
+ * @param e Elbow value
+ * @param h Hand value
+ * @param cmd Command code
+ * @param message Message string
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_single_dev_send(const char *input_mac, uint8_t dev_code, float b, float s, float e, float h, uint8_t cmd, const char *message) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (!input_mac || strlen(input_mac) != 17) {
+        esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, 3, "invalid MAC address format.", NULL);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    uint8_t mac_array[6];
+    esp_err_t ret = esp_now_string_to_mac(input_mac, mac_array);
+    if (ret != ESP_OK) {
+        esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, 3, "invalid MAC address format.", NULL);
+        return ret;
+    }
+    
+    esp_now_message_t msg = {};
+    memset(&msg, 0, sizeof(msg));
+    
+    msg.dev_code = dev_code;
+    msg.base = b;
+    msg.shoulder = s;
+    msg.elbow = e;
+    msg.hand = h;
+    msg.cmd = cmd;
+    
+    if (message) {
+        strncpy(msg.message, message, sizeof(msg.message) - 1);
+        msg.message[sizeof(msg.message) - 1] = '\0';
+    }
+    
+    // Store single follower device (Arduino compatibility)
+    memcpy(esp_now_control.single_follower_dev, mac_array, 6);
+    
+    ret = esp_now_controller_send_data(mac_array, (uint8_t*)&msg, sizeof(esp_now_message_t));
+    int status = (ret == ESP_OK) ? 8 : 7;
+    const char *status_msg = (ret == ESP_OK) ? "sent with success." : "error sending the data.";
+    
+    esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, status, status_msg, NULL);
+    
+    return ret;
+}
+
+/**
+ * @brief Single device flow control (Arduino compatible)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_single_dev_flow_ctrl(void) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    esp_now_message_t msg = {};
+    memset(&msg, 0, sizeof(msg));
+    
+    // TODO: Get current joint values from servo controller
+    // msg.base = radB;
+    // msg.shoulder = radS;
+    // msg.elbow = radE;  
+    // msg.hand = radG;
+    
+    esp_err_t ret = esp_now_controller_send_data(esp_now_control.single_follower_dev, (uint8_t*)&msg, sizeof(esp_now_message_t));
+    int status = (ret == ESP_OK) ? 8 : 7;
+    const char *status_msg = (ret == ESP_OK) ? "sent with success." : "error sending the data.";
+    
+    esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, status, status_msg, NULL);
+    
+    return ret;
+}
+
+/**
+ * @brief Group devices flow control (Arduino compatible)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_group_devs_flow_ctrl(void) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    esp_now_message_t msg = {};
+    memset(&msg, 0, sizeof(msg));
+    
+    // TODO: Get current joint values from servo controller
+    // msg.base = radB;
+    // msg.shoulder = radS;
+    // msg.elbow = radE;
+    // msg.hand = radG;
+    
+    esp_err_t ret = esp_now_controller_broadcast_data((uint8_t*)&msg, sizeof(esp_now_message_t));
+    int status = (ret == ESP_OK) ? 8 : 7;
+    const char *status_msg = (ret == ESP_OK) ? "sent with success." : "error sending the data.";
+    
+    esp_now_controller_send_json_feedback(CMD_ESP_NOW_SEND, status, status_msg, NULL);
+    
+    return ret;
+}
+
+/**
+ * @brief Change broadcast mode (Arduino compatible)
+ * @param input_mode True to enable broadcast control, false to disable
+ * @param input_mac MAC address for whitelist
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t esp_now_controller_change_broadcast_mode(bool input_mode, const char *input_mac) {
+    if (!esp_now_initialized) {
+        ESP_LOGE(TAG, "ESP-NOW controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    esp_now_control.ctrl_by_broadcast = input_mode;
+    
+    if (input_mac && strlen(input_mac) == 17) {
+        uint8_t mac_array[6];
+        esp_err_t ret = esp_now_string_to_mac(input_mac, mac_array);
+        if (ret == ESP_OK) {
+            memcpy(esp_now_control.mac_whitelist_broadcast, mac_array, 6);
+        }
+    }
+    
+    const char *status_msg = input_mode ? 
+        "it can be ctrl by esp-now broadcast cmd." : 
+        "it won't be ctrl by esp-now broadcast cmd.";
+    
+    ESP_LOGI(TAG, "%s", status_msg);
+    esp_now_controller_send_info_feedback(status_msg);
+    
+    return ESP_OK;
+}
+
+/**
+ * @brief Get this device MAC address (Arduino compatible)
+ * @param mac_str Buffer to store MAC address string (minimum 18 chars)
+ */
+void esp_now_controller_get_this_dev_mac_address(char *mac_str) {
+    if (!mac_str) {
+        return;
+    }
+    
+    uint8_t mac[6];
+    esp_err_t ret = esp_now_controller_get_this_mac(mac);
+    if (ret == ESP_OK) {
+        char *mac_string = esp_now_mac_to_string(mac);
+        if (mac_string) {
+            strncpy(mac_str, mac_string, 18);
+            mac_str[17] = '\0';
+            free(mac_string);
+            
+            // Store in control structure
+            strncpy(esp_now_control.this_dev_mac_str, mac_str, 18);
+            memcpy(esp_now_control.this_dev_mac, mac, 6);
+            
+            ESP_LOGI(TAG, "Device MAC: %s", mac_str);
+        }
+    }
+}
+
+/**
+ * @brief Send JSON feedback message (Arduino compatible)
+ * @param type Message type (CMD_ESP_NOW_SEND, CMD_ESP_NOW_RECV)
+ * @param status Status code
+ * @param message Status message
+ * @param mac MAC address (optional)
+ */
+void esp_now_controller_send_json_feedback(int type, int status, const char *message, const char *mac) {
+    cJSON *json = cJSON_CreateObject();
+    if (!json) {
+        return;
+    }
+    
+    cJSON_AddNumberToObject(json, "T", type);
+    cJSON_AddNumberToObject(json, "status", status);
+    cJSON_AddStringToObject(json, "megs", message ? message : "");
+    
+    if (mac) {
+        cJSON_AddStringToObject(json, "mac", mac);
+    }
+    
+    char *json_string = cJSON_Print(json);
+    if (json_string) {
+        printf("%s\n", json_string);  // Arduino Serial.println equivalent
+        free(json_string);
+    }
+    
+    cJSON_Delete(json);
+}
+
+/**
+ * @brief Send info feedback message (Arduino compatible)
+ * @param info Info message
+ */
+void esp_now_controller_send_info_feedback(const char *info) {
+    cJSON *json = cJSON_CreateObject();
+    if (!json) {
+        return;
+    }
+    
+    cJSON_AddStringToObject(json, "info", info ? info : "");
+    
+    char *json_string = cJSON_Print(json);
+    if (json_string) {
+        printf("%s\n", json_string);  // Arduino Serial.println equivalent
+        free(json_string);
+    }
+    
+    cJSON_Delete(json);
 }

@@ -11,12 +11,6 @@
 #include <string.h>
 
 static const char *TAG = "WiFi_Controller";
-
-// WiFi configuration
-#define WIFI_SSID_MAX_LEN 32
-#define WIFI_PASSWORD_MAX_LEN 64
-#define WIFI_MAXIMUM_RETRY 5
-#define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT BIT1
 
 // Global variables
@@ -124,7 +118,8 @@ esp_err_t wifi_controller_connect_sta(const char *ssid, const char *password)
     ESP_LOGI(TAG, "Connecting to WiFi SSID: %s", ssid);
 
     // Configure station mode
-    wifi_config_t wifi_config = {0};
+    wifi_config_t wifi_config = {};
+    memset(&wifi_config, 0, sizeof(wifi_config));
     strncpy((char *)wifi_config.sta.ssid, ssid, WIFI_SSID_MAX_LEN - 1);
     
     if (password != NULL && strlen(password) > 0) {
@@ -155,8 +150,10 @@ esp_err_t wifi_controller_start_ap(const char *ssid, const char *password, uint8
     ESP_LOGI(TAG, "Starting WiFi AP with SSID: %s", ssid);
 
     // Configure AP mode
-    wifi_config_t wifi_config = {0};
+    wifi_config_t wifi_config = {};
+    memset(&wifi_config, 0, sizeof(wifi_config));
     strncpy((char *)wifi_config.ap.ssid, ssid, WIFI_SSID_MAX_LEN - 1);
+    wifi_config.ap.ssid_len = strlen(ssid);
     
     if (password != NULL && strlen(password) >= 8) {
         strncpy((char *)wifi_config.ap.password, password, WIFI_PASSWORD_MAX_LEN - 1);
@@ -166,8 +163,11 @@ esp_err_t wifi_controller_start_ap(const char *ssid, const char *password, uint8
     }
 
     wifi_config.ap.channel = channel;
+    wifi_config.ap.ssid_hidden = 0;
     wifi_config.ap.max_connection = 4;
     wifi_config.ap.beacon_interval = 100;
+    wifi_config.ap.pairwise_cipher = WIFI_CIPHER_TYPE_CCMP;
+    wifi_config.ap.ftm_responder = false;
 
     // Set WiFi mode to AP
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));

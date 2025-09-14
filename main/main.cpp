@@ -27,6 +27,11 @@
 #include "../inc/ugv_advanced.h"
 #include "../inc/module_handlers.h"
 #include "../inc/system_manager.h"
+#include "../inc/esp_now_controller.h"
+#include "../inc/battery_controller.h"
+#include "../inc/led_controller.h"
+#include "../inc/wifi_controller.h"
+#include "../inc/http_server.h"
 
 static const char *TAG = "Main";
 
@@ -41,9 +46,11 @@ static void wait_for_system_initialization(void)
 // Global variables
 static QueueHandle_t json_cmd_queue;
 static TaskHandle_t main_task_handle;
-static TaskHandle_t imu_task_handle;
-static TaskHandle_t motion_task_handle;
-static TaskHandle_t uart_task_handle;
+static TaskHandle_t motion_control_task_handle;
+static TaskHandle_t esp_now_flow_control_task_handle;
+static TaskHandle_t system_monitor_task_handle;
+static TaskHandle_t battery_monitor_task_handle;
+static TaskHandle_t led_status_task_handle;
 
 // Configuration
 ugv_config_t ugv_config = {
@@ -59,9 +66,11 @@ ugv_config_t ugv_config = {
 
 // Task function declarations
 static void main_task(void *pvParameters);
-static void imu_task(void *pvParameters);
-static void motion_task(void *pvParameters);
-static void uart_task(void *pvParameters);
+static void motion_control_task(void *pvParameters);
+static void esp_now_flow_control_task(void *pvParameters);
+static void system_monitor_task(void *pvParameters);
+static void battery_monitor_task(void *pvParameters);
+static void led_status_task(void *pvParameters);
 
 extern "C" void app_main(void)
 {
@@ -85,11 +94,24 @@ extern "C" void app_main(void)
         return;
     }
     
-    // Create tasks
+    // Create main coordination task
     xTaskCreatePinnedToCore(main_task, "main_task", 32768, NULL, 5, &main_task_handle, 0);
-    xTaskCreatePinnedToCore(imu_task, "imu_task", 6144, NULL, 4, &imu_task_handle, 1);
-    xTaskCreatePinnedToCore(motion_task, "motion_task", 6144, NULL, 3, &motion_task_handle, 0);
-    xTaskCreatePinnedToCore(uart_task, "uart_task", 8192, NULL, 4, &uart_task_handle, 0);
+    
+    // Start controller-specific tasks (only those that have task implementations)
+    xTaskCreatePinnedToCore(uart_controller_task, "uart_task", 8192, NULL, 4, NULL, 0);
+    
+    // NOTE: IMU controller doesn't have a dedicated task function yet
+    // It is managed through individual API functions called from other tasks
+    // Motion control now has its own dedicated task (motion_control_task) below
+    
+    // Create critical control tasks
+    xTaskCreatePinnedToCore(motion_control_task, "motion_ctrl", 4096, NULL, 6, &motion_control_task_handle, 0);
+    
+    // Create system-level tasks
+    xTaskCreatePinnedToCore(esp_now_flow_control_task, "esp_now_flow", 4096, NULL, 3, &esp_now_flow_control_task_handle, 1);
+    xTaskCreatePinnedToCore(system_monitor_task, "sys_monitor", 3072, NULL, 2, &system_monitor_task_handle, 0);
+    xTaskCreatePinnedToCore(battery_monitor_task, "battery_mon", 3072, NULL, 2, &battery_monitor_task_handle, 1);
+    xTaskCreatePinnedToCore(led_status_task, "led_status", 2048, NULL, 1, &led_status_task_handle, 0);
     
     ESP_LOGI(TAG, "RaspRover application started successfully");
 }
@@ -138,128 +160,180 @@ static void main_task(void *pvParameters)
     }
 }
 
-// IMU task
-static void imu_task(void *pvParameters)
+// Motion control task (CRITICAL: Continuous PID control loop)
+static void motion_control_task(void *pvParameters)
 {
-    ESP_LOGI(TAG, "IMU task started");
+    ESP_LOGI(TAG, "Motion control task started");
     
     wait_for_system_initialization();
     
-    // IMU calibration
-    ESP_LOGI(TAG, "Starting IMU calibration...");
-    oled_controller_display_text(3, "IMU Calibrating...");
-    oled_controller_update();
-    
-    imu_controller_calibrate();
-    
-    oled_controller_display_text(3, "IMU Ready");
-    oled_controller_update();
-    
-    // IMU data processing loop
-    while (1) {
-        imu_data_t imu_data;
-        if (imu_controller_read_data(&imu_data) == ESP_OK) {
-            // Process IMU data
-            if (ugv_config.module_type == 2) { // Gimbal mode
-                // Apply gimbal stabilization (only if gimbal is initialized)
-                // Note: Temporarily disabled to prevent log spam affecting motion control
-                // gimbal_controller_stabilize(&imu_data);
-            }
-        }
-        
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz IMU update rate
-    }
-}
-
-// Motion task
-static void motion_task(void *pvParameters)
-{
-    ESP_LOGI(TAG, "Motion task started");
-    
-    wait_for_system_initialization();
-    
-    // Initialize encoders
+    // Initialize motion control components
     motion_module_init_encoders();
-    
-    // Initialize PID controllers
     motion_module_init_pid();
     
-    // Motion control loop (matching Arduino loop sequence)
+    ESP_LOGI(TAG, "Motion control loop starting - 50Hz PID control");
+    
+    // CRITICAL: Continuous motion control loop
     while (1) {
         if (!system_manager_is_emergency_stop()) {
-            // Update encoder readings
+            // 1. Update encoder readings (get current wheel speeds)
             motion_module_update_encoders();
             
-            // Get wheel speeds (matching Arduino getLeftSpeed/getRightSpeed)
-            motion_module_get_left_speed();
-            motion_module_get_right_speed();
+            // 2. Compute PID control (calculate motor commands based on setpoint vs actual)
+            motion_module_compute_pid();
             
-            // Compute PID control (matching Arduino LeftPidControllerCompute/RightPidControllerCompute)
-            motion_module_left_pid_compute();
-            motion_module_right_pid_compute();
+            // 3. Apply motor control signals (send PWM to motors)
+            motion_module_apply_motor_control();
+        } else {
+            // During emergency stop, ensure motors are stopped
+            motion_module_emergency_stop();
         }
         
-        vTaskDelay(pdMS_TO_TICKS(20)); // 50Hz motion control rate
+        // Run at 50Hz (20ms) for smooth motion control
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
-// UART task
-static void uart_task(void *pvParameters)
+// ESP-NOW flow control task (high-level coordination)
+static void esp_now_flow_control_task(void *pvParameters)
 {
-    ESP_LOGI(TAG, "UART task started");
+    ESP_LOGI(TAG, "ESP-NOW flow control task started");
     
-    // Wait for system initialization (UART already configured by system manager)
     wait_for_system_initialization();
     
-    ESP_LOGI(TAG, "UART initialized, starting command processing...");
-    
-    // UART buffer for accumulating JSON commands (like Arduino implementation)
-    static char uart_buffer[2048];
-    static size_t buffer_pos = 0;
-    static uint32_t last_char_time = 0;
-    const uint32_t JSON_TIMEOUT_MS = 100; // 100ms timeout for JSON completion
-    
-    char* temp_data = (char*) malloc(1024);
-    
-    // UART command processing loop
+    // ESP-NOW flow control coordination
     while (1) {
-        // Read data from UART
-        int len = uart_read_bytes(UART_NUM_0, temp_data, 1023, pdMS_TO_TICKS(10));
-        if (len > 0) {
-            temp_data[len] = '\0';
-            last_char_time = esp_timer_get_time() / 1000; // Convert to milliseconds
+        if (ugv_config.esp_now_mode == 1) { // Flow leader group
+            // Group flow control
+            esp_now_controller_group_devs_flow_ctrl();
+        } else if (ugv_config.esp_now_mode == 2) { // Flow leader single
+            // Single device flow control
+            esp_now_controller_single_dev_flow_ctrl();
+        }
+        
+        // Handle mode changes and peer management
+        // TODO: Add ESP-NOW peer management logic
+        
+        vTaskDelay(pdMS_TO_TICKS(1000)); // 1Hz flow control rate
+    }
+}
+
+// System monitor task (high-level system health)
+static void system_monitor_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "System monitor task started");
+    
+    wait_for_system_initialization();
+    
+    // System monitoring loop
+    while (1) {
+        // Check system health
+        UBaseType_t free_stack = uxTaskGetStackHighWaterMark(NULL);
+        size_t free_heap = esp_get_free_heap_size();
+        
+        // Log system status periodically
+        static uint32_t status_counter = 0;
+        if (++status_counter >= 30) { // Every 30 seconds
+            ESP_LOGI(TAG, "System Status - Free Stack: %d, Free Heap: %d, Uptime: %lld ms", 
+                     free_stack, free_heap, esp_timer_get_time() / 1000);
             
-            // Append to buffer
-            for (int i = 0; i < len && buffer_pos < sizeof(uart_buffer) - 1; i++) {
-                char c = temp_data[i];
-                uart_buffer[buffer_pos++] = c;
+            // Update OLED with system info
+            char status_line[32];
+            snprintf(status_line, sizeof(status_line), "Heap:%dKB", free_heap / 1024);
+            oled_controller_display_text(1, status_line);
+            oled_controller_update();
+            
+            status_counter = 0;
+        }
+        
+        // Check for emergency conditions
+        if (free_heap < 10240) { // Less than 10KB free
+            ESP_LOGW(TAG, "Low memory warning: %d bytes free", free_heap);
+        }
+        
+        // Module-specific monitoring
+        if (ugv_config.module_type == 2) { // Gimbal mode
+            // Monitor gimbal status
+            // TODO: Add gimbal health checks
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(1000)); // 1Hz monitoring rate
+    }
+}
+
+// Battery monitor task (high-level power management)
+static void battery_monitor_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "Battery monitor task started");
+    
+    wait_for_system_initialization();
+    
+    // Battery monitoring loop
+    while (1) {
+        // Check battery status using individual functions (since get_info is not implemented yet)
+        float voltage;
+        uint8_t percentage;
+        if (battery_controller_read_voltage(&voltage) == ESP_OK) {
+            percentage = battery_controller_get_percentage();
+            
+            // Check battery levels
+            if (percentage <= 10) {
+                ESP_LOGW(TAG, "Battery critical: %d%%", percentage);
+                // TODO: Trigger low battery actions
                 
-                // Check for end of JSON command (newline character)
-                if (c == '\n') {
-                    uart_buffer[buffer_pos] = '\0';
-                    ESP_LOGI(TAG, "Complete JSON command received (%d bytes): %s", buffer_pos, uart_buffer);
-                    
-                    // Process the command using uart_controller
-                    esp_err_t result = uart_controller_parse_command(uart_buffer, buffer_pos);
-                    if (result != ESP_OK) {
-                        ESP_LOGE(TAG, "Failed to process command: %s", esp_err_to_name(result));
-                    }
-                    
-                    // Reset buffer for next command
-                    buffer_pos = 0;
-                }
+                // Update OLED with battery warning
+                oled_controller_display_text(2, "BATTERY LOW!");
+                oled_controller_update();
+            } else if (percentage <= 20) {
+                ESP_LOGW(TAG, "Battery low: %d%%", percentage);
+            }
+            
+            // Periodic battery status update
+            static uint32_t battery_counter = 0;
+            if (++battery_counter >= 10) { // Every 10 seconds
+                ESP_LOGI(TAG, "Battery: %.2fV %d%%", voltage, percentage);
+                battery_counter = 0;
             }
         }
         
-        // Handle timeout for incomplete JSON (like Arduino implementation)
-        uint32_t current_time = esp_timer_get_time() / 1000;
-        if (buffer_pos > 0 && (current_time - last_char_time > JSON_TIMEOUT_MS)) {
-            ESP_LOGW(TAG, "JSON timeout - clearing buffer (%d bytes): %.*s", buffer_pos, buffer_pos, uart_buffer);
-            buffer_pos = 0;
+        vTaskDelay(pdMS_TO_TICKS(1000)); // 1Hz battery monitoring rate
+    }
+}
+
+// LED status task (visual feedback coordination)
+static void led_status_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "LED status task started");
+    
+    wait_for_system_initialization();
+    
+    // LED status coordination loop
+    while (1) {
+        // System status indication
+        if (system_manager_is_emergency_stop()) {
+            // Red blinking for emergency stop
+            led_controller_set_mode(LED_MODE_BLINK);
+            led_controller_set_color(LED_COLOR_RED);
+        } else if (system_manager_is_initialized()) {
+            // Green for normal operation
+            led_controller_set_mode(LED_MODE_ON);
+            led_controller_set_color(LED_COLOR_GREEN);
+        } else {
+            // Blue pulsing for initialization
+            led_controller_set_mode(LED_MODE_PULSE);
+            led_controller_set_color(LED_COLOR_BLUE);
         }
         
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz UART processing rate
+        // Module-specific LED patterns
+        if (ugv_config.module_type == 2) { // Gimbal mode
+            // TODO: Add gimbal-specific LED patterns
+        }
+        
+        // ESP-NOW status indication
+        if (ugv_config.esp_now_mode != 0) { // Not none
+            // TODO: Add ESP-NOW status LED patterns
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(100)); // 10Hz LED update rate
     }
-    
-    free(temp_data);
 }

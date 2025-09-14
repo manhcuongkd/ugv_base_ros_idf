@@ -11,6 +11,10 @@
 extern "C" {
 #endif
 
+// HTTP Server Configuration
+#define HTTP_SERVER_PORT                80
+#define MAX_URI_HANDLERS                16
+
 // HTTP server configuration - using ESP-IDF's built-in types
 // Use httpd_config_t directly from esp_http_server.h
 

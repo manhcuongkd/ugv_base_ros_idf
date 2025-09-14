@@ -12,6 +12,12 @@
 extern "C" {
 #endif
 
+// WiFi Configuration
+#define WIFI_SSID_MAX_LEN               32
+#define WIFI_PASSWORD_MAX_LEN           64
+#define WIFI_MAXIMUM_RETRY              5
+#define WIFI_CONNECTED_BIT              BIT0
+
 // WiFi configuration - using ESP-IDF's built-in types
 typedef struct {
     wifi_sta_config_t sta_config;  // Station configuration

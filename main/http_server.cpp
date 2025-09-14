@@ -9,10 +9,6 @@
 
 static const char *TAG = "HTTP_Server";
 
-// HTTP server configuration
-#define HTTP_SERVER_PORT 80
-#define MAX_URI_HANDLERS 16
-
 // Global variables
 static httpd_handle_t server = NULL;
 static bool server_initialized = false;
@@ -591,6 +587,9 @@ static esp_err_t api_wifi_post_handler(httpd_req_t *req)
     int wifi_mode = mode && cJSON_IsNumber(mode) ? (int)mode->valuedouble : 3;
 
     ESP_LOGI(TAG, "WiFi command: %s, SSID: %s, Mode: %d", cmd_str, wifi_ssid, wifi_mode);
+    
+    // Use wifi_pass to avoid unused variable warning
+    (void)wifi_pass; // Explicitly mark as intentionally unused
 
     // Send response
     cJSON *response = cJSON_CreateObject();

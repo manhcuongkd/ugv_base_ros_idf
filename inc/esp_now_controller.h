@@ -10,16 +10,28 @@
 #include "json_parser.h"
 
 // ESP-NOW Configuration
-#define ESP_NOW_CHANNEL 0
-#define ESP_NOW_ENCRYPT false
-#define MAX_FOLLOWERS 10
-#define MAX_MESSAGE_SIZE 250
+#define ESP_NOW_CHANNEL                 0
+#define ESP_NOW_ENCRYPT                 false
+#define MAX_FOLLOWERS                   10
+#define MAX_MESSAGE_SIZE                250
+#define ESP_NOW_MAX_PEERS               10
+#define ESP_NOW_QUEUE_SIZE              10
+#define ESP_NOW_TASK_STACK_SIZE         4096
+#define ESP_NOW_FLOW_CONTROL_INTERVAL   1000    // ms
 
 // ESP-NOW Modes
 #define ESP_NOW_MODE_NONE 0
 #define ESP_NOW_MODE_FLOW_LEADER_GROUP 1
 #define ESP_NOW_MODE_FLOW_LEADER_SINGLE 2
 #define ESP_NOW_MODE_FOLLOWER 3
+
+// Arduino-compatible command types (check for conflicts with json_parser.h)
+#ifndef CMD_ESP_NOW_SEND
+#define CMD_ESP_NOW_SEND                1001
+#endif
+#ifndef CMD_ESP_NOW_RECV
+#define CMD_ESP_NOW_RECV                1002
+#endif
 
 // ESP-NOW Message Structure
 typedef struct {
@@ -50,6 +62,9 @@ typedef struct {
     esp_now_message_t current_message;
     bool message_ready;
     uint32_t flow_control_interval_ms;
+    bool ctrl_by_broadcast;                    // Arduino compatibility
+    uint8_t mac_whitelist_broadcast[6];        // Arduino compatibility
+    uint8_t single_follower_dev[6];            // Arduino compatibility
 } esp_now_control_t;
 
 // Function Prototypes
@@ -63,6 +78,21 @@ esp_err_t esp_now_controller_send_json_command(const char *json_str);
 esp_err_t esp_now_controller_get_peers(esp_now_peer_t *peers, uint8_t *count);
 esp_err_t esp_now_controller_get_status(esp_now_control_t *status);
 esp_err_t esp_now_controller_set_flow_control_interval(uint32_t interval_ms);
+
+// Arduino-compatible API functions
+esp_err_t esp_now_controller_change_mode(uint8_t input_mode);
+esp_err_t esp_now_controller_register_new_follower(const char *input_mac);
+esp_err_t esp_now_controller_delete_follower(const char *input_mac);
+esp_err_t esp_now_controller_group_send(uint8_t dev_code, float b, float s, float e, float h, uint8_t cmd, const char *message);
+esp_err_t esp_now_controller_single_dev_send(const char *input_mac, uint8_t dev_code, float b, float s, float e, float h, uint8_t cmd, const char *message);
+esp_err_t esp_now_controller_single_dev_flow_ctrl(void);
+esp_err_t esp_now_controller_group_devs_flow_ctrl(void);
+esp_err_t esp_now_controller_change_broadcast_mode(bool input_mode, const char *input_mac);
+void esp_now_controller_get_this_dev_mac_address(char *mac_str);
+
+// JSON feedback functions (Arduino compatibility)
+void esp_now_controller_send_json_feedback(int type, int status, const char *message, const char *mac);
+void esp_now_controller_send_info_feedback(const char *info);
 
 // Utility functions
 char* esp_now_mac_to_string(const uint8_t *mac);

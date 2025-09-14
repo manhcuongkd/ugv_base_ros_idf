@@ -8,21 +8,6 @@
 
 static const char *TAG = "BatteryController";
 
-// INA219 registers
-#define INA219_REG_CONFIG      0x00
-#define INA219_REG_SHUNTVOLT   0x01
-#define INA219_REG_BUSVOLT     0x02
-#define INA219_REG_POWER       0x03
-#define INA219_REG_CURRENT     0x04
-#define INA219_REG_CALIB       0x05
-
-// Configuration values
-#define INA219_CONFIG_BUS_VOLTAGE_RANGE_16V    0x0000
-#define INA219_CONFIG_GAIN_1_40MV             0x0000
-#define INA219_CONFIG_BUS_ADC_RES_12BIT       0x0080
-#define INA219_CONFIG_SHUNT_ADC_RES_12BIT     0x0080
-#define INA219_CONFIG_MODE_SANDBVOLT_CONTINUOUS 0x0007
-
 // Private variables
 static bool battery_initialized = false;
 static uint16_t ina219_calibration;
@@ -218,7 +203,7 @@ static esp_err_t ina219_calibrate(void) {
     return ina219_write_register(INA219_REG_CALIB, ina219_calibration);
 }
 
-static float ina219_read_shunt_voltage(void) {
+static float __attribute__((unused)) ina219_read_shunt_voltage(void) {
     uint16_t raw_shunt;
     if (ina219_read_register(INA219_REG_SHUNTVOLT, &raw_shunt) != ESP_OK) {
         return 0.0f;

@@ -9,6 +9,11 @@
 extern "C" {
 #endif
 
+// UART Configuration
+#define UART_NUM                        UART_NUM_0
+#define UART_BAUD_RATE                  115200
+#define UART_BUFFER_SIZE                1024
+
 // Function declarations
 esp_err_t uart_controller_init(void);
 esp_err_t uart_controller_deinit(void);

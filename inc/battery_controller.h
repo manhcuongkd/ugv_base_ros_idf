@@ -10,6 +10,21 @@
 extern "C" {
 #endif
 
+// INA219 Register Addresses
+#define INA219_REG_CONFIG               0x00
+#define INA219_REG_SHUNTVOLT            0x01
+#define INA219_REG_BUSVOLT              0x02
+#define INA219_REG_POWER                0x03
+#define INA219_REG_CURRENT              0x04
+#define INA219_REG_CALIB                0x05
+
+// INA219 Configuration Values
+#define INA219_CONFIG_BUS_VOLTAGE_RANGE_16V         0x0000
+#define INA219_CONFIG_GAIN_1_40MV                   0x0000
+#define INA219_CONFIG_BUS_ADC_RES_12BIT             0x0080
+#define INA219_CONFIG_SHUNT_ADC_RES_12BIT           0x0080
+#define INA219_CONFIG_MODE_SANDBVOLT_CONTINUOUS     0x0007
+
 // Battery status
 typedef enum {
     BATTERY_STATUS_UNKNOWN = 0,     // Battery status unknown
