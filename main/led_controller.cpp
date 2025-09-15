@@ -56,10 +56,11 @@ esp_err_t led_controller_init(void) {
     }
 
     // Configure LEDC channels for Arduino-compatible LEDs
+    // Use channels 2 and 3 to avoid conflict with motor PWM (channels 0 and 1)
     ledc_channel_config_t ledc_channel_io4 = {
         .gpio_num = LED_IO4_PIN,
         .speed_mode = LEDC_LOW_SPEED_MODE,
-        .channel = LEDC_CHANNEL_0,
+        .channel = LEDC_CHANNEL_2,
         .intr_type = LEDC_INTR_DISABLE,
         .timer_sel = LED_PWM_TIMER,
         .duty = 0,
@@ -70,7 +71,7 @@ esp_err_t led_controller_init(void) {
     ledc_channel_config_t ledc_channel_io5 = {
         .gpio_num = LED_IO5_PIN,
         .speed_mode = LEDC_LOW_SPEED_MODE,
-        .channel = LEDC_CHANNEL_1,
+        .channel = LEDC_CHANNEL_3,
         .intr_type = LEDC_INTR_DISABLE,
         .timer_sel = LED_PWM_TIMER,
         .duty = 0,
@@ -108,6 +109,11 @@ esp_err_t led_controller_heartbeat(void) {
     if (!led_state.enabled) {
         return ESP_OK;
     }
+    
+    // Skip heartbeat if LED is in manual control mode (brightness > 0 means manual control)
+    if (led_state.brightness > 0 && led_state.current_mode == LED_MODE_ON) {
+        return ESP_OK;
+    }
 
     heartbeat_counter++;
 
@@ -115,8 +121,8 @@ esp_err_t led_controller_heartbeat(void) {
         case LED_MODE_BREATH: {
             // Breathing pattern: fade in/out
             uint32_t duty = (uint32_t)((sinf(heartbeat_counter * 0.1f) + 1.0f) * 0.5f * led_state.brightness);
-            led_set_pwm_duty(LEDC_CHANNEL_0, duty); // IO4
-            led_set_pwm_duty(LEDC_CHANNEL_1, duty); // IO5
+            led_set_pwm_duty(LEDC_CHANNEL_2, duty); // IO4
+            led_set_pwm_duty(LEDC_CHANNEL_3, duty); // IO5
             break;
         }
         
@@ -124,16 +130,16 @@ esp_err_t led_controller_heartbeat(void) {
             // Blink pattern: on/off every 500ms
             bool led_on = (heartbeat_counter / 50) % 2;
             uint32_t duty = led_on ? led_state.brightness : 0;
-            led_set_pwm_duty(LEDC_CHANNEL_0, duty); // IO4
-            led_set_pwm_duty(LEDC_CHANNEL_1, duty); // IO5
+            led_set_pwm_duty(LEDC_CHANNEL_2, duty); // IO4
+            led_set_pwm_duty(LEDC_CHANNEL_3, duty); // IO5
             break;
         }
         
         case LED_MODE_PULSE: {
             // Pulse pattern: smooth fade
             uint32_t duty = (uint32_t)((sinf(heartbeat_counter * 0.05f) + 1.0f) * 0.5f * led_state.brightness);
-            led_set_pwm_duty(LEDC_CHANNEL_0, duty); // IO4
-            led_set_pwm_duty(LEDC_CHANNEL_1, duty); // IO5
+            led_set_pwm_duty(LEDC_CHANNEL_2, duty); // IO4
+            led_set_pwm_duty(LEDC_CHANNEL_3, duty); // IO5
             break;
         }
         
@@ -200,8 +206,8 @@ esp_err_t led_controller_turn_off(void) {
     ESP_LOGI(TAG, "LEDs turned off");
     
     // Turn off all LEDs
-    led_set_pwm_duty(LEDC_CHANNEL_0, 0);  // IO4
-    led_set_pwm_duty(LEDC_CHANNEL_1, 0);  // IO5
+    led_set_pwm_duty(LEDC_CHANNEL_2, 0);  // IO4
+    led_set_pwm_duty(LEDC_CHANNEL_3, 0);  // IO5
     
     return ESP_OK;
 }
@@ -222,8 +228,6 @@ static void led_set_pwm_duty(uint8_t channel, uint32_t duty) {
     }
 
     // Arduino compatible: 8-bit duty (0-255) maps directly to 8-bit LEDC
-    // uint32_t max_duty = (1 << LED_PWM_RESOLUTION) - 1;  // 255 for 8-bit
-    // uint32_t ledc_duty = (duty * max_duty) / 255;
     
     ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)channel, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)channel);
@@ -231,8 +235,8 @@ static void led_set_pwm_duty(uint8_t channel, uint32_t duty) {
 
 static void led_update_color(void) {
     if (!led_state.enabled || !led_state.on) {
-        led_set_pwm_duty(LEDC_CHANNEL_0, 0);  // IO4
-        led_set_pwm_duty(LEDC_CHANNEL_1, 0);  // IO5
+        led_set_pwm_duty(LEDC_CHANNEL_2, 0);  // IO4
+        led_set_pwm_duty(LEDC_CHANNEL_3, 0);  // IO5
         return;
     }
 
@@ -251,16 +255,22 @@ static void led_update_color(void) {
         io5_duty = led_state.brightness;
     }
 
-    led_set_pwm_duty(LEDC_CHANNEL_0, io4_duty);  // IO4
-    led_set_pwm_duty(LEDC_CHANNEL_1, io5_duty);  // IO5
+    led_set_pwm_duty(LEDC_CHANNEL_2, io4_duty);  // IO4
+    led_set_pwm_duty(LEDC_CHANNEL_3, io5_duty);  // IO5
 }
 
 esp_err_t led_controller_set_rgb(uint8_t red, uint8_t green, uint8_t blue) {
     ESP_LOGI(TAG, "Setting Arduino LED: IO4=%d, IO5=%d", red, green);
     
+    // Set LED to manual control mode to prevent heartbeat interference
+    led_state.enabled = true;
+    led_state.on = (red > 0 || green > 0 || blue > 0);
+    led_state.current_mode = LED_MODE_ON;
+    led_state.brightness = (red > green) ? red : green; // Use max brightness
+    
     // Arduino compatible: use red as IO4, green as IO5, ignore blue
-    led_set_pwm_duty(LEDC_CHANNEL_0, red);   // IO4
-    led_set_pwm_duty(LEDC_CHANNEL_1, green); // IO5
+    led_set_pwm_duty(LEDC_CHANNEL_2, red);   // IO4
+    led_set_pwm_duty(LEDC_CHANNEL_3, green); // IO5
     
     return ESP_OK;
 }
@@ -299,8 +309,8 @@ esp_err_t led_pwm_ctrl(int io4_input, int io5_input) {
     ESP_LOGI(TAG, "Arduino LED control: IO4=%d, IO5=%d", io4_constrained, io5_constrained);
     
     // Set PWM duty cycles directly
-    led_set_pwm_duty(LEDC_CHANNEL_0, (uint32_t)io4_constrained);  // IO4
-    led_set_pwm_duty(LEDC_CHANNEL_1, (uint32_t)io5_constrained);  // IO5
+    led_set_pwm_duty(LEDC_CHANNEL_2, (uint32_t)io4_constrained);  // IO4
+    led_set_pwm_duty(LEDC_CHANNEL_3, (uint32_t)io5_constrained);  // IO5
     
     return ESP_OK;
 }

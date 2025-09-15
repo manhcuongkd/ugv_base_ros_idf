@@ -54,7 +54,7 @@ static TaskHandle_t led_status_task_handle;
 
 // Configuration
 ugv_config_t ugv_config = {
-    .main_type = 1,        // RaspRover
+    .main_type = 2,        // UGV Rover
     .module_type = 2,      // Gimbal
     .info_print = 1,       // Debug info
     .esp_now_mode = 3,     // Follower mode

@@ -66,8 +66,29 @@
 #define TILT_ANGLE_MIN                  -30.0f      // Tilt minimum angle (degrees)
 #define TILT_ANGLE_MAX                  90.0f       // Tilt maximum angle (degrees)
 #define SERVO_POSITION_RANGE            4095.0f     // Servo position range (0-4095)
+#define SERVO_POSITION_MAX              4095        // Maximum servo position value
+#define SERVO_POSITION_MIN              0           // Minimum servo position value
 #define PAN_ANGLE_RANGE                 360.0f      // Pan angle range (degrees)
 #define TILT_ANGLE_RANGE                120.0f      // Tilt angle range (degrees)
+
+// Axis Identifiers
+#define GIMBAL_PAN_AXIS                 0           // Pan axis identifier
+#define GIMBAL_TILT_AXIS                1           // Tilt axis identifier
+
+// Speed and Acceleration Multipliers
+#define GIMBAL_SPEED_MULTIPLIER         0           // Speed multiplier for immediate movement
+#define GIMBAL_ACCELERATION_MULTIPLIER  100         // Acceleration multiplier
+
+// Servo Feedback Default Values
+#define SERVO_FEEDBACK_DEFAULT_CURRENT  0.5f        // Default current value (A)
+#define SERVO_FEEDBACK_DEFAULT_VOLTAGE  12.0f       // Default voltage value (V)
+#define SERVO_FEEDBACK_DEFAULT_TEMP     25.0f       // Default temperature value (°C)
+#define SERVO_FEEDBACK_DEFAULT_SPEED    0           // Default speed value
+#define SERVO_FEEDBACK_DEFAULT_LOAD     0           // Default load value
+#define SERVO_FEEDBACK_DEFAULT_MODE     0           // Default mode value
+
+// Bit Manipulation Constants
+#define SERVO_NEGATIVE_POSITION_BIT     15          // Bit position for negative position flag
 
 // Gimbal Control Modes
 #define GIMBAL_MODE_MANUAL 0

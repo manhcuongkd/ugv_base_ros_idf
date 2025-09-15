@@ -248,9 +248,6 @@ esp_err_t motion_module_apply_motor_control(void)
     }
     
     // Apply PID output to motors
-    // float left_pwm = left_pid_output;
-    // float right_pwm = right_pid_output;
-
     float left_pwm = left_pid_controller.output;
     float right_pwm = right_pid_controller.output;
     
@@ -264,7 +261,7 @@ esp_err_t motion_module_apply_motor_control(void)
     
     left_pwm_filtered = left_pwm_filtered + PWM_SMOOTHING_FACTOR * (left_pwm - left_pwm_filtered);
     right_pwm_filtered = right_pwm_filtered + PWM_SMOOTHING_FACTOR * (right_pwm - right_pwm_filtered);
-
+    
     // Limit filtered PWM values
     left_pwm_filtered = (left_pwm_filtered > PWM_MAX_DUTY) ? PWM_MAX_DUTY : (left_pwm_filtered < -PWM_MAX_DUTY) ? -PWM_MAX_DUTY : left_pwm_filtered;
     right_pwm_filtered = (right_pwm_filtered > PWM_MAX_DUTY) ? PWM_MAX_DUTY : (right_pwm_filtered < -PWM_MAX_DUTY) ? -PWM_MAX_DUTY : right_pwm_filtered;

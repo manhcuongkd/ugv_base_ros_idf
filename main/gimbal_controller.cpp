@@ -19,7 +19,6 @@ static QueueHandle_t gimbal_command_queue = NULL;
 static TaskHandle_t gimbal_task_handle = NULL;
 
 // Private Function Prototypes
-static void gimbal_task(void *pvParameters);
 static esp_err_t gimbal_send_sync_write_command(uint8_t *ids, uint8_t id_count, 
                                                int16_t *positions, uint16_t *speeds, uint8_t *accs);
 static esp_err_t gimbal_validate_position(uint16_t pan, uint16_t tilt);
@@ -29,8 +28,8 @@ static uint16_t gimbal_angle_to_position(float angle, uint8_t axis);
 static float gimbal_position_to_angle(uint16_t position, uint8_t axis);
 static void gimbal_log_movement(const char* direction, uint16_t pan, uint16_t tilt);
 static esp_err_t gimbal_apply_stabilization_compensation(const imu_data_t *imu_data);
-static float constrainFloat(float value, float min, float max);
-static float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh);
+static float constrain_float(float value, float min_val, float max_val);
+static float map_float(float value, float from_low, float from_high, float to_low, float to_high);
 
 // =============================================================================
 // PUBLIC API FUNCTIONS
@@ -67,22 +66,7 @@ esp_err_t gimbal_controller_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    // Create gimbal processing task
-    // BaseType_t task_created = xTaskCreate(
-    //     gimbal_task,
-    //     "gimbal_task",
-    //     GIMBAL_TASK_STACK_SIZE,
-    //     NULL,
-    //     GIMBAL_TASK_PRIORITY,
-    //     &gimbal_task_handle
-    // );
-
-    // if (task_created != pdPASS) {
-    //     ESP_LOGE(TAG, "Failed to create gimbal task");
-    //     vQueueDelete(gimbal_command_queue);
-    //     gimbal_command_queue = NULL;
-    //     return ESP_ERR_NO_MEM;
-    // }
+    // Create gimbal processing task - DISABLED for direct control
 
     gimbal_initialized = true;
     ESP_LOGI(TAG, "Gimbal controller initialized successfully");
@@ -168,12 +152,12 @@ esp_err_t gimbal_controller_set_position(uint16_t pan, uint16_t tilt)
     uint8_t servo_ids[2] = {GIMBAL_PAN_ID, GIMBAL_TILT_ID};
     int16_t positions[2] = {(int16_t)pan, (int16_t)tilt};
     uint16_t speeds[2] = {
-        (uint16_t)(gimbal_control.pan_speed * 0),
-        (uint16_t)(gimbal_control.tilt_speed * 0)
+        (uint16_t)(gimbal_control.pan_speed * GIMBAL_SPEED_MULTIPLIER),
+        (uint16_t)(gimbal_control.tilt_speed * GIMBAL_SPEED_MULTIPLIER)
     };
     uint8_t accelerations[2] = {
-        (uint8_t)(gimbal_control.pan_acceleration * 100),
-        (uint8_t)(gimbal_control.tilt_acceleration * 100)
+        (uint8_t)(gimbal_control.pan_acceleration * GIMBAL_ACCELERATION_MULTIPLIER),
+        (uint8_t)(gimbal_control.tilt_acceleration * GIMBAL_ACCELERATION_MULTIPLIER)
     };
 
     // Send command to servos
@@ -203,8 +187,8 @@ esp_err_t gimbal_controller_set_pan_tilt(float pan_angle, float tilt_angle)
     tilt_angle = fmaxf(TILT_ANGLE_MIN, fminf(tilt_angle, TILT_ANGLE_MAX));
 
     // Convert angles to servo positions
-    uint16_t pan_pos = gimbal_angle_to_position(pan_angle, 0);   // 0 = pan axis
-    uint16_t tilt_pos = gimbal_angle_to_position(tilt_angle, 1); // 1 = tilt axis
+    uint16_t pan_pos = gimbal_angle_to_position(pan_angle, GIMBAL_PAN_AXIS);
+    uint16_t tilt_pos = gimbal_angle_to_position(tilt_angle, GIMBAL_TILT_AXIS);
 
     ESP_LOGI(TAG, "🎯 Angle to position: pan=%.1f° -> %d, tilt=%.1f° -> %d", 
              pan_angle, pan_pos, tilt_angle, tilt_pos);
@@ -489,19 +473,19 @@ esp_err_t gimbal_controller_get_feedback(gimbal_feedback_t *pan_fb, gimbal_feedb
         pan_fb->speed = pan_speed;
         pan_fb->load = pan_load;
         pan_fb->voltage = pan_voltage / 10.0f;
-        pan_fb->current = 0.5f; // Not available in basic protocol
+        pan_fb->current = SERVO_FEEDBACK_DEFAULT_CURRENT; // Not available in basic protocol
         pan_fb->temper = pan_temperature;
         pan_fb->mode = pan_moving;
     } else {
         // Use fallback data
         pan_fb->status = false;
         pan_fb->pos = gimbal_control.pan_position;
-        pan_fb->speed = 0;
-        pan_fb->load = 0;
-        pan_fb->voltage = 12.0f;
-        pan_fb->current = 0.5f;
-        pan_fb->temper = 25.0f;
-        pan_fb->mode = 0;
+        pan_fb->speed = SERVO_FEEDBACK_DEFAULT_SPEED;
+        pan_fb->load = SERVO_FEEDBACK_DEFAULT_LOAD;
+        pan_fb->voltage = SERVO_FEEDBACK_DEFAULT_VOLTAGE;
+        pan_fb->current = SERVO_FEEDBACK_DEFAULT_CURRENT;
+        pan_fb->temper = SERVO_FEEDBACK_DEFAULT_TEMP;
+        pan_fb->mode = SERVO_FEEDBACK_DEFAULT_MODE;
         ESP_LOGW(TAG, "Using simulated pan servo feedback");
     }
 
@@ -524,19 +508,19 @@ esp_err_t gimbal_controller_get_feedback(gimbal_feedback_t *pan_fb, gimbal_feedb
         tilt_fb->speed = tilt_speed;
         tilt_fb->load = tilt_load;
         tilt_fb->voltage = tilt_voltage / 10.0f;
-        tilt_fb->current = 0.5f; // Not available in basic protocol
+        tilt_fb->current = SERVO_FEEDBACK_DEFAULT_CURRENT; // Not available in basic protocol
         tilt_fb->temper = tilt_temperature;
         tilt_fb->mode = tilt_moving;
     } else {
         // Use fallback data
         tilt_fb->status = false;
         tilt_fb->pos = gimbal_control.tilt_position;
-        tilt_fb->speed = 0;
-        tilt_fb->load = 0;
-        tilt_fb->voltage = 12.0f;
-        tilt_fb->current = 0.5f;
-        tilt_fb->temper = 25.0f;
-        tilt_fb->mode = 0;
+        tilt_fb->speed = SERVO_FEEDBACK_DEFAULT_SPEED;
+        tilt_fb->load = SERVO_FEEDBACK_DEFAULT_LOAD;
+        tilt_fb->voltage = SERVO_FEEDBACK_DEFAULT_VOLTAGE;
+        tilt_fb->current = SERVO_FEEDBACK_DEFAULT_CURRENT;
+        tilt_fb->temper = SERVO_FEEDBACK_DEFAULT_TEMP;
+        tilt_fb->mode = SERVO_FEEDBACK_DEFAULT_MODE;
         ESP_LOGW(TAG, "Using simulated tilt servo feedback");
     }
 
@@ -589,63 +573,6 @@ float gimbal_controller_pulse_to_degrees(uint16_t pulse, uint8_t axis)
 // PRIVATE FUNCTIONS
 // =============================================================================
 
-static void gimbal_task(void *pvParameters)
-{
-    gimbal_command_t cmd;
-    ESP_LOGI(TAG, "Gimbal task started");
-
-    while (1) {
-        // Process commands from queue
-        if (xQueueReceive(gimbal_command_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
-            uint16_t new_pan, new_tilt;
-            
-            switch (cmd.move_type) {
-                case GIMBAL_MOVE_ABSOLUTE:
-                    ESP_LOGD(TAG, "Absolute move: pan=%.2f, tilt=%.2f", 
-                             cmd.pan_value, cmd.tilt_value);
-                    
-                    if (cmd.pan_value >= GIMBAL_PAN_MIN && cmd.pan_value <= GIMBAL_PAN_MAX &&
-                        cmd.tilt_value >= GIMBAL_TILT_MIN && cmd.tilt_value <= GIMBAL_TILT_MAX) {
-                        gimbal_controller_set_position((uint16_t)cmd.pan_value, (uint16_t)cmd.tilt_value);
-                    }
-                    break;
-
-                case GIMBAL_MOVE_RELATIVE:
-                    ESP_LOGD(TAG, "Relative move: pan=%.2f, tilt=%.2f", 
-                             cmd.pan_value, cmd.tilt_value);
-                    
-                    new_pan = gimbal_control.pan_position + (int16_t)cmd.pan_value;
-                    new_tilt = gimbal_control.tilt_position + (int16_t)cmd.tilt_value;
-                    
-                    // Clamp to limits
-                    new_pan = (new_pan < GIMBAL_PAN_MIN) ? GIMBAL_PAN_MIN : 
-                              (new_pan > GIMBAL_PAN_MAX) ? GIMBAL_PAN_MAX : new_pan;
-                    new_tilt = (new_tilt < GIMBAL_TILT_MIN) ? GIMBAL_TILT_MIN : 
-                               (new_tilt > GIMBAL_TILT_MAX) ? GIMBAL_TILT_MAX : new_tilt;
-                    
-                    gimbal_controller_set_position(new_pan, new_tilt);
-                    break;
-
-                case GIMBAL_MOVE_VELOCITY:
-                    ESP_LOGD(TAG, "Velocity move: pan=%.2f, tilt=%.2f", 
-                             cmd.pan_value, cmd.tilt_value);
-                    
-                    gimbal_control.pan_speed = cmd.pan_value;
-                    gimbal_control.tilt_speed = cmd.tilt_value;
-                    break;
-
-                default:
-                    ESP_LOGW(TAG, "Unknown move type: %d", cmd.move_type);
-                    break;
-            }
-        }
-
-        // Update timestamp
-        gimbal_control.last_update_time = esp_timer_get_time() / 1000;
-
-        vTaskDelay(pdMS_TO_TICKS(1000 / GIMBAL_UPDATE_RATE_HZ));
-    }
-}
 
 static esp_err_t gimbal_send_sync_write_command(uint8_t *ids, uint8_t id_count, 
                                                int16_t *positions, uint16_t *speeds, uint8_t *accs)
@@ -663,7 +590,7 @@ static esp_err_t gimbal_send_sync_write_command(uint8_t *ids, uint8_t id_count,
         // Handle negative positions
         if (pos < 0) {
             pos = -pos;
-            pos |= (1 << 15);
+            pos |= (1 << SERVO_NEGATIVE_POSITION_BIT);
         }
         
         uint16_t speed = speeds[i];
@@ -732,25 +659,14 @@ static esp_err_t gimbal_send_sync_write_command(uint8_t *ids, uint8_t id_count,
 
 static esp_err_t gimbal_validate_position(uint16_t pan, uint16_t tilt)
 {
-    // if (pan < GIMBAL_PAN_MIN || pan > GIMBAL_PAN_MAX) {
-    //     ESP_LOGE(TAG, "Pan position out of range: %d (valid: %d-%d)", 
-    //              pan, GIMBAL_PAN_MIN, GIMBAL_PAN_MAX);
-    //     return ESP_ERR_INVALID_ARG;
-    // }
-    
-    // if (tilt < GIMBAL_TILT_MIN || tilt > GIMBAL_TILT_MAX) {
-    //     ESP_LOGE(TAG, "Tilt position out of range: %d (valid: %d-%d)", 
-    //              tilt, GIMBAL_TILT_MIN, GIMBAL_TILT_MAX);
-    //     return ESP_ERR_INVALID_ARG;
-    // }
 
-    if (pan < 0 || pan > 4095) {
+    if (pan > SERVO_POSITION_MAX) {
         ESP_LOGE(TAG, "Pan position out of range: %d (valid: %d-%d)", 
                  pan, GIMBAL_PAN_MIN, GIMBAL_PAN_MAX);
         return ESP_ERR_INVALID_ARG;
     }
     
-    if (tilt < 0 || tilt > 4095) {
+    if (tilt > SERVO_POSITION_MAX) {
         ESP_LOGE(TAG, "Tilt position out of range: %d (valid: %d-%d)", 
                  tilt, GIMBAL_TILT_MIN, GIMBAL_TILT_MAX);
         return ESP_ERR_INVALID_ARG;
@@ -772,40 +688,28 @@ static esp_err_t gimbal_validate_acceleration(float acceleration)
 
 static uint16_t gimbal_angle_to_position(float angle, uint8_t axis)
 {
-    // if (axis == 0) { // Pan axis
-    //     float normalized = angle + 180.0f; // -180..180 -> 0..360
-    //     normalized = fmaxf(0.0f, fminf(normalized, 180));
-        
-    //     // Apply direction correction for pan
-    //     uint16_t pos = (uint16_t)((normalized * SERVO_POSITION_RANGE) / PAN_ANGLE_RANGE);
-    //     return GIMBAL_CENTER_POSITION - pos + GIMBAL_CENTER_POSITION; // Invert direction
-    // } else { // Tilt axis
-    //     float normalized = angle + 30.0f; // -30..90 -> 0..120
-    //     normalized = fmaxf(0.0f, fminf(normalized, TILT_ANGLE_RANGE));
-    //     return GIMBAL_CENTER_POSITION - (uint16_t)((normalized * SERVO_POSITION_RANGE) / TILT_ANGLE_RANGE) + GIMBAL_CENTER_POSITION;
-    // }
     uint16_t pos = 0U;
-    if (axis == 0)
+    if (axis == GIMBAL_PAN_AXIS)
     {
-        angle = constrainFloat(angle, -180, 180);
-        pos = 2047 + (int)round(mapFloat(angle, 0, 360, 0, 4095)); 
+        angle = constrain_float(angle, PAN_ANGLE_MIN, PAN_ANGLE_MAX);
+        pos = GIMBAL_CENTER_POSITION + (int)round(map_float(angle, 0, PAN_ANGLE_RANGE, SERVO_POSITION_MIN, SERVO_POSITION_MAX)); 
     }
     else
     {
-        angle = constrainFloat(angle, -30, 90);
-        pos = 2047 - (int)round(mapFloat(angle, 0, 360, 0, 4095)); 
+        angle = constrain_float(angle, TILT_ANGLE_MIN, TILT_ANGLE_MAX);
+        pos = GIMBAL_CENTER_POSITION - (int)round(map_float(angle, 0, PAN_ANGLE_RANGE, SERVO_POSITION_MIN, SERVO_POSITION_MAX)); 
     }
     return pos;
 }
 
 static float gimbal_position_to_angle(uint16_t position, uint8_t axis)
 {
-    if (axis == 0) { // Pan axis
+    if (axis == GIMBAL_PAN_AXIS) { // Pan axis
         float normalized = (float)position * PAN_ANGLE_RANGE / SERVO_POSITION_RANGE;
-        return normalized - 180.0f;
+        return normalized - PAN_ANGLE_RANGE/2;
     } else { // Tilt axis
         float normalized = (float)position * TILT_ANGLE_RANGE / SERVO_POSITION_RANGE;
-        return normalized - 30.0f;
+        return normalized - (TILT_ANGLE_RANGE/2 + TILT_ANGLE_MIN);
     }
 }
 
@@ -840,20 +744,20 @@ static esp_err_t gimbal_apply_stabilization_compensation(const imu_data_t *imu_d
     return ESP_OK;
 }
 
-static float constrainFloat(float value, float min, float max) 
+static float constrain_float(float value, float min_val, float max_val) 
 {
-  if (value < min) 
+  if (value < min_val) 
   {
-    return min;
+    return min_val;
   } 
-  else if (value > max) 
+  else if (value > max_val) 
   {
-    return max;
+    return max_val;
   }
   return value;
 }
 
-static float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh) 
+static float map_float(float value, float from_low, float from_high, float to_low, float to_high) 
 {
-  return (value - fromLow) * (toHigh - toLow) / (fromHigh - fromLow) + toLow;
+  return (value - from_low) * (to_high - to_low) / (from_high - from_low) + to_low;
 }
