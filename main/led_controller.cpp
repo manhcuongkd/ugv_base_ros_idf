@@ -222,10 +222,11 @@ static void led_set_pwm_duty(uint8_t channel, uint32_t duty) {
     }
 
     // Arduino compatible: 8-bit duty (0-255) maps directly to 8-bit LEDC
-    uint32_t max_duty = (1 << LED_PWM_RESOLUTION) - 1;  // 255 for 8-bit
-    uint32_t ledc_duty = (duty * max_duty) / 255;
+    // uint32_t max_duty = (1 << LED_PWM_RESOLUTION) - 1;  // 255 for 8-bit
+    // uint32_t ledc_duty = (duty * max_duty) / 255;
     
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)channel, ledc_duty);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)channel, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)channel);
 }
 
 static void led_update_color(void) {
