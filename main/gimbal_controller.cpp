@@ -29,6 +29,8 @@ static uint16_t gimbal_angle_to_position(float angle, uint8_t axis);
 static float gimbal_position_to_angle(uint16_t position, uint8_t axis);
 static void gimbal_log_movement(const char* direction, uint16_t pan, uint16_t tilt);
 static esp_err_t gimbal_apply_stabilization_compensation(const imu_data_t *imu_data);
+static float constrainFloat(float value, float min, float max);
+static float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh);
 
 // =============================================================================
 // PUBLIC API FUNCTIONS
@@ -66,21 +68,21 @@ esp_err_t gimbal_controller_init(void)
     }
 
     // Create gimbal processing task
-    BaseType_t task_created = xTaskCreate(
-        gimbal_task,
-        "gimbal_task",
-        GIMBAL_TASK_STACK_SIZE,
-        NULL,
-        GIMBAL_TASK_PRIORITY,
-        &gimbal_task_handle
-    );
+    // BaseType_t task_created = xTaskCreate(
+    //     gimbal_task,
+    //     "gimbal_task",
+    //     GIMBAL_TASK_STACK_SIZE,
+    //     NULL,
+    //     GIMBAL_TASK_PRIORITY,
+    //     &gimbal_task_handle
+    // );
 
-    if (task_created != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create gimbal task");
-        vQueueDelete(gimbal_command_queue);
-        gimbal_command_queue = NULL;
-        return ESP_ERR_NO_MEM;
-    }
+    // if (task_created != pdPASS) {
+    //     ESP_LOGE(TAG, "Failed to create gimbal task");
+    //     vQueueDelete(gimbal_command_queue);
+    //     gimbal_command_queue = NULL;
+    //     return ESP_ERR_NO_MEM;
+    // }
 
     gimbal_initialized = true;
     ESP_LOGI(TAG, "Gimbal controller initialized successfully");
@@ -166,12 +168,12 @@ esp_err_t gimbal_controller_set_position(uint16_t pan, uint16_t tilt)
     uint8_t servo_ids[2] = {GIMBAL_PAN_ID, GIMBAL_TILT_ID};
     int16_t positions[2] = {(int16_t)pan, (int16_t)tilt};
     uint16_t speeds[2] = {
-        (uint16_t)(gimbal_control.pan_speed * 100),
-        (uint16_t)(gimbal_control.tilt_speed * 100)
+        (uint16_t)(gimbal_control.pan_speed * 0),
+        (uint16_t)(gimbal_control.tilt_speed * 0)
     };
     uint8_t accelerations[2] = {
-        (uint8_t)(gimbal_control.pan_acceleration * 10),
-        (uint8_t)(gimbal_control.tilt_acceleration * 10)
+        (uint8_t)(gimbal_control.pan_acceleration * 100),
+        (uint8_t)(gimbal_control.tilt_acceleration * 100)
     };
 
     // Send command to servos
@@ -730,13 +732,25 @@ static esp_err_t gimbal_send_sync_write_command(uint8_t *ids, uint8_t id_count,
 
 static esp_err_t gimbal_validate_position(uint16_t pan, uint16_t tilt)
 {
-    if (pan < GIMBAL_PAN_MIN || pan > GIMBAL_PAN_MAX) {
+    // if (pan < GIMBAL_PAN_MIN || pan > GIMBAL_PAN_MAX) {
+    //     ESP_LOGE(TAG, "Pan position out of range: %d (valid: %d-%d)", 
+    //              pan, GIMBAL_PAN_MIN, GIMBAL_PAN_MAX);
+    //     return ESP_ERR_INVALID_ARG;
+    // }
+    
+    // if (tilt < GIMBAL_TILT_MIN || tilt > GIMBAL_TILT_MAX) {
+    //     ESP_LOGE(TAG, "Tilt position out of range: %d (valid: %d-%d)", 
+    //              tilt, GIMBAL_TILT_MIN, GIMBAL_TILT_MAX);
+    //     return ESP_ERR_INVALID_ARG;
+    // }
+
+    if (pan < 0 || pan > 4095) {
         ESP_LOGE(TAG, "Pan position out of range: %d (valid: %d-%d)", 
                  pan, GIMBAL_PAN_MIN, GIMBAL_PAN_MAX);
         return ESP_ERR_INVALID_ARG;
     }
     
-    if (tilt < GIMBAL_TILT_MIN || tilt > GIMBAL_TILT_MAX) {
+    if (tilt < 0 || tilt > 4095) {
         ESP_LOGE(TAG, "Tilt position out of range: %d (valid: %d-%d)", 
                  tilt, GIMBAL_TILT_MIN, GIMBAL_TILT_MAX);
         return ESP_ERR_INVALID_ARG;
@@ -758,18 +772,30 @@ static esp_err_t gimbal_validate_acceleration(float acceleration)
 
 static uint16_t gimbal_angle_to_position(float angle, uint8_t axis)
 {
-    if (axis == 0) { // Pan axis
-        float normalized = angle + 180.0f; // -180..180 -> 0..360
-        normalized = fmaxf(0.0f, fminf(normalized, PAN_ANGLE_RANGE));
+    // if (axis == 0) { // Pan axis
+    //     float normalized = angle + 180.0f; // -180..180 -> 0..360
+    //     normalized = fmaxf(0.0f, fminf(normalized, 180));
         
-        // Apply direction correction for pan
-        uint16_t pos = (uint16_t)((normalized * SERVO_POSITION_RANGE) / PAN_ANGLE_RANGE);
-        return GIMBAL_CENTER_POSITION - pos + GIMBAL_CENTER_POSITION; // Invert direction
-    } else { // Tilt axis
-        float normalized = angle + 30.0f; // -30..90 -> 0..120
-        normalized = fmaxf(0.0f, fminf(normalized, TILT_ANGLE_RANGE));
-        return GIMBAL_CENTER_POSITION - (uint16_t)((normalized * SERVO_POSITION_RANGE) / TILT_ANGLE_RANGE) + GIMBAL_CENTER_POSITION;
+    //     // Apply direction correction for pan
+    //     uint16_t pos = (uint16_t)((normalized * SERVO_POSITION_RANGE) / PAN_ANGLE_RANGE);
+    //     return GIMBAL_CENTER_POSITION - pos + GIMBAL_CENTER_POSITION; // Invert direction
+    // } else { // Tilt axis
+    //     float normalized = angle + 30.0f; // -30..90 -> 0..120
+    //     normalized = fmaxf(0.0f, fminf(normalized, TILT_ANGLE_RANGE));
+    //     return GIMBAL_CENTER_POSITION - (uint16_t)((normalized * SERVO_POSITION_RANGE) / TILT_ANGLE_RANGE) + GIMBAL_CENTER_POSITION;
+    // }
+    uint16_t pos = 0U;
+    if (axis == 0)
+    {
+        angle = constrainFloat(angle, -180, 180);
+        pos = 2047 + (int)round(mapFloat(angle, 0, 360, 0, 4095)); 
     }
+    else
+    {
+        angle = constrainFloat(angle, -30, 90);
+        pos = 2047 - (int)round(mapFloat(angle, 0, 360, 0, 4095)); 
+    }
+    return pos;
 }
 
 static float gimbal_position_to_angle(uint16_t position, uint8_t axis)
@@ -812,4 +838,22 @@ static esp_err_t gimbal_apply_stabilization_compensation(const imu_data_t *imu_d
     }
 
     return ESP_OK;
+}
+
+static float constrainFloat(float value, float min, float max) 
+{
+  if (value < min) 
+  {
+    return min;
+  } 
+  else if (value > max) 
+  {
+    return max;
+  }
+  return value;
+}
+
+static float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh) 
+{
+  return (value - fromLow) * (toHigh - toLow) / (fromHigh - fromLow) + toLow;
 }

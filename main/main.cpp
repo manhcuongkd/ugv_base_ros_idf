@@ -60,7 +60,7 @@ ugv_config_t ugv_config = {
     .esp_now_mode = 3,     // Follower mode
     .ctrl_by_broadcast = true,
     .steady_mode = false,
-    .base_feedback_flow = true,
+    .base_feedback_flow = false,
     .eem_mode = 0          // Default EEM mode
 };
 
