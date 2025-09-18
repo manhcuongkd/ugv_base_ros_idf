@@ -129,10 +129,10 @@ static void main_task(void *pvParameters)
     ESP_LOGI(TAG, "Main task stack remaining after init: %u bytes", stack_remaining * sizeof(StackType_t));
     
     // Display startup message
-    oled_controller_display_text(0, "RaspRover IDF");
-    oled_controller_display_text(1, "Version: 1.0.0");
-    oled_controller_display_text(2, "Starting...");
-    oled_controller_display_text(3, "");
+    oled_controller_display_text("RaspRover IDF");
+    oled_controller_display_text("Version: 1.0.0");
+    oled_controller_display_text("Starting...");
+    oled_controller_display_text("");
     oled_controller_update();
     
     vTaskDelay(pdMS_TO_TICKS(1200));
@@ -240,7 +240,7 @@ static void system_monitor_task(void *pvParameters)
             // Update OLED with system info
             char status_line[32];
             snprintf(status_line, sizeof(status_line), "Heap:%dKB", free_heap / 1024);
-            oled_controller_display_text(1, status_line);
+            oled_controller_display_text(status_line);
             oled_controller_update();
             
             status_counter = 0;
@@ -282,7 +282,7 @@ static void battery_monitor_task(void *pvParameters)
                 // TODO: Trigger low battery actions
                 
                 // Update OLED with battery warning
-                oled_controller_display_text(2, "BATTERY LOW!");
+                oled_controller_display_text("BATTERY LOW!");
                 oled_controller_update();
             } else if (percentage <= 20) {
                 ESP_LOGW(TAG, "Battery low: %d%%", percentage);

@@ -29,6 +29,7 @@ static bool oled_initialized = false;
 static uint8_t oled_buffer[OLED_WIDTH * OLED_HEIGHT / 8];
 static bool screen_default_mode = true;  // Arduino-style default mode flag
 static uint32_t last_info_update_time = 0;  // For periodic updates
+static uint8_t line_num_cur = 0U;
 
 // Private function prototypes
 static esp_err_t oled_write_command(uint8_t cmd);
@@ -140,6 +141,8 @@ esp_err_t oled_controller_init(void) {
 
     ESP_LOGI(TAG, "Initializing OLED controller...");
 
+    line_num_cur = 0U;
+
     // Wait a bit for I2C driver to be fully ready
     vTaskDelay(pdMS_TO_TICKS(100));
 
@@ -230,8 +233,8 @@ esp_err_t oled_controller_init(void) {
     return ESP_OK;
 }
 
-esp_err_t oled_controller_display_text(uint8_t line_num, const char *text) {
-    if (!oled_initialized || line_num >= OLED_MAX_LINES) {
+esp_err_t oled_controller_display_text(const char *text) {
+    if (!oled_initialized || line_num_cur >= OLED_MAX_LINES) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -240,19 +243,24 @@ esp_err_t oled_controller_display_text(uint8_t line_num, const char *text) {
     }
 
     // Store text in line buffer (Arduino-style)
-    strncpy(oled_state.lines[line_num].text, text, OLED_MAX_CHARS_PER_LINE);
-    oled_state.lines[line_num].text[OLED_MAX_CHARS_PER_LINE] = '\0';
+    strncpy(oled_state.lines[line_num_cur].text, text, OLED_MAX_CHARS_PER_LINE);
+    oled_state.lines[line_num_cur].text[OLED_MAX_CHARS_PER_LINE] = '\0';
 
     // Clear the line area in buffer (8 pixels per line) - page-based indexing
-    uint8_t page = line_num;
+    uint8_t page = line_num_cur;
     if (page < OLED_HEIGHT / 8) {
         for (int x = 0; x < OLED_WIDTH; x++) {
             oled_buffer[page * OLED_WIDTH + x] = 0x00;
         }
     }
 
-    // Draw the text at correct y position (line_num * 8)
-    oled_draw_string(0, line_num * 8, text);
+    // Draw the text at correct y position (line_num_cur * 8)
+    oled_draw_string(0, line_num_cur * 8, text);
+    line_num_cur++;
+    if(OLED_MAX_LINES <= line_num_cur)
+    {
+        line_num_cur = 0U;
+    }
     
     // Update the display
     return oled_controller_update();
@@ -293,20 +301,20 @@ esp_err_t oled_controller_update_system_info(void) {
     
     // Line 0: System status
     snprintf(line, sizeof(line), "RaspRover IDF v1.0");
-    oled_controller_display_text(0, line);
+    oled_controller_display_text(line);
     
     // Line 1: Free heap
     snprintf(line, sizeof(line), "Heap: %" PRIu32 " KB", (uint32_t)(esp_get_free_heap_size() / 1024));
-    oled_controller_display_text(1, line);
+    oled_controller_display_text(line);
     
     // Line 2: Uptime
     uint32_t uptime = xTaskGetTickCount() * portTICK_PERIOD_MS / 1000;
     snprintf(line, sizeof(line), "Uptime: %02" PRIu32 ":%02" PRIu32, uptime / 60, uptime % 60);
-    oled_controller_display_text(2, line);
+    oled_controller_display_text(line);
     
     // Line 3: System status
     snprintf(line, sizeof(line), "Status: Ready");
-    oled_controller_display_text(3, line);
+    oled_controller_display_text(line);
     
     return oled_controller_update();
 }
@@ -377,22 +385,22 @@ static void oled_draw_string(uint8_t x, uint8_t y, const char *str) {
     }
 }
 
-esp_err_t oled_controller_set_text(uint8_t line_num, const char *text) {
+esp_err_t oled_controller_set_text(const char *text) {
     if (!oled_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
     
-    if (line_num >= OLED_MAX_LINES || !text) {
+    if (line_num_cur >= OLED_MAX_LINES || !text) {
         return ESP_ERR_INVALID_ARG;
     }
     
-    ESP_LOGI(TAG, "Setting OLED line %d text: %s", line_num, text);
+    ESP_LOGI(TAG, "Setting OLED line %d text: %s", line_num_cur, text);
     
     // Copy text to line buffer (truncate if too long)
-    strncpy(oled_state.lines[line_num].text, text, OLED_MAX_CHARS_PER_LINE);
-    oled_state.lines[line_num].text[OLED_MAX_CHARS_PER_LINE] = '\0';
-    oled_state.lines[line_num].updated = true;
-    oled_state.lines[line_num].timestamp = esp_timer_get_time() / 1000; // Convert to ms
+    strncpy(oled_state.lines[line_num_cur].text, text, OLED_MAX_CHARS_PER_LINE);
+    oled_state.lines[line_num_cur].text[OLED_MAX_CHARS_PER_LINE] = '\0';
+    oled_state.lines[line_num_cur].updated = true;
+    oled_state.lines[line_num_cur].timestamp = esp_timer_get_time() / 1000; // Convert to ms
     
     // Clear buffer and redraw all lines
     oled_clear_buffer();
@@ -409,6 +417,11 @@ esp_err_t oled_controller_set_text(uint8_t line_num, const char *text) {
         oled_write_data(oled_buffer[i]);
     }
     
+    line_num_cur++;
+    if(OLED_MAX_LINES <= line_num_cur)
+    {
+        line_num_cur = 0U;
+    }
     ESP_LOGI(TAG, "OLED text updated successfully");
     return ESP_OK;
 }
@@ -460,25 +473,25 @@ esp_err_t oled_controller_reset_to_default(void) {
 }
 
 // Arduino-style OLED control function
-esp_err_t oled_controller_control(uint8_t line_num, const char *text) {
+esp_err_t oled_controller_control(const char *text) {
     if (!oled_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
     
-    if (line_num >= OLED_MAX_LINES || !text) {
+    if (line_num_cur >= OLED_MAX_LINES || !text) {
         return ESP_ERR_INVALID_ARG;
     }
     
-    ESP_LOGI(TAG, "OLED control: line=%d, text=%s", line_num, text);
+    ESP_LOGI(TAG, "OLED control: line=%d, text=%s", line_num_cur, text);
     
     // Switch to custom mode (Arduino-style)
     screen_default_mode = false;
     
     // Set custom line text
-    strncpy(oled_state.lines[line_num].text, text, OLED_MAX_CHARS_PER_LINE);
-    oled_state.lines[line_num].text[OLED_MAX_CHARS_PER_LINE] = '\0';
-    oled_state.lines[line_num].updated = true;
-    oled_state.lines[line_num].timestamp = esp_timer_get_time() / 1000;
+    strncpy(oled_state.lines[line_num_cur].text, text, OLED_MAX_CHARS_PER_LINE);
+    oled_state.lines[line_num_cur].text[OLED_MAX_CHARS_PER_LINE] = '\0';
+    oled_state.lines[line_num_cur].updated = true;
+    oled_state.lines[line_num_cur].timestamp = esp_timer_get_time() / 1000;
     
     // Clear display and show custom lines
     oled_clear_buffer();
@@ -493,6 +506,12 @@ esp_err_t oled_controller_control(uint8_t line_num, const char *text) {
     oled_set_position(0, 0);
     for (uint16_t i = 0; i < sizeof(oled_buffer); i++) {
         oled_write_data(oled_buffer[i]);
+    }
+    
+    line_num_cur++;
+    if(OLED_MAX_LINES <= line_num_cur)
+    {
+        line_num_cur = 0U;
     }
     
     ESP_LOGI(TAG, "OLED custom display updated");
