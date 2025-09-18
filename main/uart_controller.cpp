@@ -232,7 +232,8 @@ static esp_err_t uart_parse_command(const char *data, size_t len)
 
         case CMD_OLED_CTRL: // {"T":3,"lineNum":0,"Text":"Hello"}
             ESP_LOGI(TAG, "OLED control: line=%d, text=%s", cmd.data.oled_ctrl.lineNum, cmd.data.oled_ctrl.Text);
-            oled_controller_control(cmd.data.oled_ctrl.lineNum, cmd.data.oled_ctrl.Text);
+            // oled_controller_control(cmd.data.oled_ctrl.lineNum, cmd.data.oled_ctrl.Text);
+            oled_controller_display_text(cmd.data.oled_ctrl.Text);
             break;
 
         case (uint16_t)CMD_OLED_DEFAULT: // {"T":-3}

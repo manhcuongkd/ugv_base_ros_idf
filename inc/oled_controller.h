@@ -62,36 +62,26 @@ esp_err_t oled_controller_deinit(void);
 
 /**
  * @brief Display text on specific line
- * @param line_num Line number (0-3)
  * @param text Text to display
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t oled_controller_display_text(uint8_t line_num, const char *text);
+esp_err_t oled_controller_display_text(const char *text);
 
 /**
  * @brief Display text with alignment
- * @param line_num Line number (0-3)
  * @param text Text to display
  * @param alignment Text alignment
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t oled_controller_display_text_aligned(uint8_t line_num, const char *text, oled_alignment_t alignment);
+esp_err_t oled_controller_display_text_aligned(const char *text, oled_alignment_t alignment);
 
 /**
  * @brief Display text with font size
- * @param line_num Line number (0-3)
  * @param text Text to display
  * @param font_size Font size
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t oled_controller_display_text_font(uint8_t line_num, const char *text, oled_font_size_t font_size);
-
-/**
- * @brief Clear specific line
- * @param line_num Line number (0-3)
- * @return ESP_OK on success, error code otherwise
- */
-esp_err_t oled_controller_clear_line(uint8_t line_num);
+esp_err_t oled_controller_display_text_font(const char *text, oled_font_size_t font_size);
 
 /**
  * @brief Clear entire display
@@ -101,11 +91,10 @@ esp_err_t oled_controller_clear_display(void);
 
 /**
  * @brief Set text on specific line
- * @param line_num Line number (0-3)
  * @param text Text to display
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t oled_controller_set_text(uint8_t line_num, const char *text);
+esp_err_t oled_controller_set_text(const char *text);
 
 /**
  * @brief Reset display to default state
@@ -115,11 +104,10 @@ esp_err_t oled_controller_reset_to_default(void);
 
 /**
  * @brief Arduino-style OLED control function
- * @param line_num Line number (0-3)
  * @param text Text to display
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t oled_controller_control(uint8_t line_num, const char *text);
+esp_err_t oled_controller_control( const char *text);
 
 /**
  * @brief Arduino-style periodic info update
@@ -132,13 +120,6 @@ esp_err_t oled_controller_info_update(void);
  * @return ESP_OK on success, error code otherwise
  */
 esp_err_t oled_controller_update(void);
-
-/**
- * @brief Update specific line
- * @param line_num Line number (0-3)
- * @return ESP_OK on success, error code otherwise
- */
-esp_err_t oled_controller_update_line(uint8_t line_num);
 
 /**
  * @brief Update system information display
@@ -235,28 +216,19 @@ esp_err_t oled_controller_get_power(bool *on);
 
 /**
  * @brief Display scrolling text
- * @param line_num Line number (0-3)
  * @param text Text to scroll
  * @param scroll_speed Scroll speed in pixels per frame
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t oled_controller_scroll_text(uint8_t line_num, const char *text, uint8_t scroll_speed);
-
-/**
- * @brief Stop text scrolling
- * @param line_num Line number (0-3)
- * @return ESP_OK on success, error code otherwise
- */
-esp_err_t oled_controller_stop_scroll(uint8_t line_num);
+esp_err_t oled_controller_scroll_text(const char *text, uint8_t scroll_speed);
 
 /**
  * @brief Display progress bar
- * @param line_num Line number (0-3)
  * @param progress Progress value (0-100)
  * @param label Progress label
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t oled_controller_display_progress(uint8_t line_num, uint8_t progress, const char *label);
+esp_err_t oled_controller_display_progress(uint8_t progress, const char *label);
 
 /**
  * @brief Display menu
@@ -273,20 +245,6 @@ esp_err_t oled_controller_display_menu(const char **items, uint8_t item_count, u
  * @return ESP_OK on success, error code otherwise
  */
 esp_err_t oled_controller_get_state(oled_state_t *state);
-
-/**
- * @brief Check if line has been updated
- * @param line_num Line number (0-3)
- * @return True if updated, false otherwise
- */
-bool oled_controller_is_line_updated(uint8_t line_num);
-
-/**
- * @brief Reset line update flag
- * @param line_num Line number (0-3)
- * @return ESP_OK on success, error code otherwise
- */
-esp_err_t oled_controller_reset_line_update_flag(uint8_t line_num);
 
 // Default display lines
 extern oled_line_t screen_line_0;

@@ -875,7 +875,7 @@ esp_err_t motion_module_set_type(uint8_t main_type, uint8_t module_type) {
     }
     
     // Update OLED screen line 2 (matching Arduino screenLine_2)
-    oled_controller_display_text(2, display_text);
+    oled_controller_display_text(display_text);
     ESP_LOGI(TAG, "Updated OLED display: %s", display_text);
     
     // Update encoder pulse rate based on current configuration
@@ -964,7 +964,7 @@ esp_err_t motion_module_load_config_from_nvs(void) {
     } else {
         ESP_LOGW(TAG, "No saved configuration found, using defaults");
         // Set default display for unknown configuration
-        oled_controller_display_text(2, "Unknown Config");
+        oled_controller_display_text("Unknown Config");
         return ESP_OK;
     }
 }
