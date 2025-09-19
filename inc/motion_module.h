@@ -250,6 +250,18 @@ esp_err_t motion_module_init_pwm(void);
 esp_err_t motion_module_set_motor(uint8_t motor_id, int8_t direction, uint16_t pwm_value);
 
 /**
+ * @brief Disable PID computation for direct PWM control
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t motion_module_disable_pid(void);
+
+/**
+ * @brief Enable PID computation for normal operation
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t motion_module_enable_pid(void);
+
+/**
  * @brief Get left wheel speed (called from main loop)
  */
 void motion_module_get_left_speed(void);

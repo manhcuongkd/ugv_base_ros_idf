@@ -208,18 +208,22 @@ static esp_err_t uart_parse_command(const char *data, size_t len)
 
         case CMD_SPEED_CTRL: // {"T":1,"L":0.5,"R":0.5}
             ESP_LOGI(TAG, "Speed control: L=%.2f, R=%.2f", cmd.data.speed_ctrl.L, cmd.data.speed_ctrl.R);
+            motion_module_enable_pid(); // Re-enable PID for speed control
             motion_module_set_speeds(cmd.data.speed_ctrl.L, cmd.data.speed_ctrl.R);
             break;
 
         case CMD_PWM_INPUT: // {"T":11,"L":164,"R":164}
             ESP_LOGI(TAG, "PWM input: L=%d, R=%d", cmd.data.pwm_input.L, cmd.data.pwm_input.R);
-            // Direct PWM control - bypass PID
-            motion_module_set_motor(0, cmd.data.pwm_input.L > 0 ? 1 : -1, abs(cmd.data.pwm_input.L));
-            motion_module_set_motor(1, cmd.data.pwm_input.R > 0 ? 1 : -1, abs(cmd.data.pwm_input.R));
+            // Direct PWM control - disable PID to prevent override
+            motion_module_disable_pid();
+            // Invert direction to fix reverse issue
+            motion_module_set_motor(0, cmd.data.pwm_input.L > 0 ? -1 : 1, abs(cmd.data.pwm_input.L));
+            motion_module_set_motor(1, cmd.data.pwm_input.R > 0 ? -1 : 1, abs(cmd.data.pwm_input.R));
             break;
 
         case CMD_ROS_CTRL: // {"T":13,"X":0.1,"Z":0.3}
             ESP_LOGI(TAG, "ROS control: X=%.2f, Z=%.2f", cmd.data.ros_ctrl.X, cmd.data.ros_ctrl.Z);
+            motion_module_enable_pid(); // Re-enable PID for ROS control
             motion_module_set_ros_motion(cmd.data.ros_ctrl.X, cmd.data.ros_ctrl.Z);
             break;
 

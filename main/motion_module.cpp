@@ -247,6 +247,11 @@ esp_err_t motion_module_apply_motor_control(void)
         return ESP_ERR_INVALID_STATE;
     }
     
+    // Skip motor control if PID is disabled (direct PWM control mode)
+    if (!pid_compute_enabled) {
+        return ESP_OK;
+    }
+    
     // Apply PID output to motors
     float left_pwm = left_pid_controller.output;
     float right_pwm = right_pid_controller.output;
@@ -503,6 +508,7 @@ esp_err_t motion_module_set_motor(uint8_t motor_id, int8_t direction, uint16_t p
             gpio_set_level(AIN2, 0);
         }
         ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, pwm_value);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
     } else { // Right motor
         if (direction > 0) {
             gpio_set_level(BIN1, 0);
@@ -515,7 +521,34 @@ esp_err_t motion_module_set_motor(uint8_t motor_id, int8_t direction, uint16_t p
             gpio_set_level(BIN2, 0);
         }
         ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, pwm_value);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
     }
+    
+    return ESP_OK;
+}
+
+// Disable PID computation for direct PWM control
+esp_err_t motion_module_disable_pid(void)
+{
+    if (!motion_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    pid_compute_enabled = false;
+    ESP_LOGI(TAG, "PID computation disabled for direct PWM control");
+    
+    return ESP_OK;
+}
+
+// Enable PID computation for normal operation
+esp_err_t motion_module_enable_pid(void)
+{
+    if (!motion_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    pid_compute_enabled = true;
+    ESP_LOGI(TAG, "PID computation enabled for normal operation");
     
     return ESP_OK;
 }
